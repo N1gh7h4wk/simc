@@ -522,9 +522,10 @@ public:
   stat_e     convert_hybrid_stat( stat_e s ) const override;
   void       assess_damage_imminent_pre_absorb( school_e, dmg_e, action_state_t* s ) override;
   void       assess_damage_imminent( school_e, dmg_e, action_state_t* s ) override;
+  void       assess_damage( school_e, dmg_e, action_state_t* ) override;
   void       target_mitigation( school_e, dmg_e, action_state_t* ) override;
-  void       copy_from( player_t* source ) override;
-  void       merge( player_t& other ) override;
+  void       copy_from( player_t* ) override;
+  void       merge( player_t& ) override;
 
   void     datacollection_begin() override;
   void     datacollection_end() override;
@@ -584,7 +585,7 @@ namespace
 template <class Base>
 struct warrior_action_t: public Base
 {
-  bool headlongrush, headlongrushgcd, sweeping_strikes, dauntless, deadly_calm, 
+  bool headlongrush, headlongrushgcd, sweeping_strikes, dauntless, deadly_calm,
     arms_damage_increase, fury_damage_increase, fury_dot_damage_increase, arms_dot_damage_increase,
     prot_warrior_damage_increase, prot_dot_damage_increase;
   double tactician_per_rage, arms_t19_2p_chance;
@@ -1058,7 +1059,7 @@ struct devastate_t: public warrior_attack_t
     if ( p -> talents.devastator -> ok() )
     {
       background = true;
-      trigger_gcd = timespan_t::zero(); 
+      trigger_gcd = timespan_t::zero();
     }
     else
     {
@@ -1915,7 +1916,7 @@ struct dragon_roar_t: public warrior_attack_t
 
 struct execute_sweep_t: public warrior_attack_t
 {
-  double dmg_mult; // This number is set in the original parent attack. 
+  double dmg_mult; // This number is set in the original parent attack.
   execute_sweep_t( warrior_t* p ):
     warrior_attack_t( "execute_sweep", p, p -> spec.execute ), dmg_mult( 0 )
   {
@@ -3184,7 +3185,7 @@ struct revenge_t: public warrior_attack_t
   double action_multiplier() const override
   {
     double am = warrior_attack_t::action_multiplier();
-    
+
     am *= 1.0 + ( p() -> talents.best_served_cold -> effectN( 1 ).percent() * std::min( target_list().size(), static_cast<size_t>( p() -> talents.best_served_cold -> effectN( 1 ).base_value() ) ) );
 
     return am;
@@ -3268,8 +3269,6 @@ struct shield_slam_t: public warrior_attack_t
   {
     parse_options( options_str );
     energize_type = ENERGIZE_NONE;
-    if ( p -> specialization() == WARRIOR_PROTECTION )
-      base_multiplier *= 0.95; 
   }
 
   double action_multiplier() const override
@@ -3484,8 +3483,10 @@ struct storm_bolt_t: public warrior_attack_t
 
 struct thunder_clap_t: public warrior_attack_t
 {
+  double shield_slam_reset;
   thunder_clap_t( warrior_t* p, const std::string& options_str ):
-    warrior_attack_t( "thunder_clap", p, p -> spec.thunder_clap )
+    warrior_attack_t( "thunder_clap", p, p -> spec.thunder_clap ),
+    shield_slam_reset( p -> spec.devastate -> effectN( 3 ).percent() )
   {
     parse_options( options_str );
     aoe = -1;
@@ -3495,6 +3496,12 @@ struct thunder_clap_t: public warrior_attack_t
     radius *= 1.0 + p -> talents.crackling_thunder -> effectN( 1 ).percent();
   }
 
+  void execute() override
+  {
+    warrior_attack_t::execute();
+    if ( rng().roll( shield_slam_reset ) )
+      p() -> cooldown.shield_slam -> reset( true );
+  }
 
   double action_multiplier() const override
   {
@@ -4201,6 +4208,7 @@ struct ignore_pain_t: public warrior_spell_t
     }
 
     amount *= 1.0 + p() -> buff.dragon_scales -> check_value();
+    amount *= 1.0 + p() -> artifact.dragon_skin.percent();
     amount += p() -> buff.ignore_pain -> current_value;
 
     if ( amount > max_ip() )
@@ -6237,6 +6245,20 @@ void warrior_t::assess_damage_imminent( school_e school, dmg_e dmg, action_state
   }
 }
 
+void warrior_t::assess_damage( school_e school, dmg_e type, action_state_t* s )
+{
+  player_t::assess_damage( school, type, s );
+
+  if ( s -> result == RESULT_DODGE || s -> result == RESULT_PARRY )
+  {
+    if ( cooldown.revenge_reset->up() )
+    {
+      buff.revenge->trigger();
+      cooldown.revenge_reset->start();
+    }
+  }
+}
+
 // warrior_t::target_mitigation ============================================
 
 void warrior_t::target_mitigation( school_e school,
@@ -6289,15 +6311,6 @@ void warrior_t::target_mitigation( school_e school,
     else if ( buff.enrage -> up() )
     { // yay we're furious and we take more damage
       s -> result_amount *= 1.0 + ( buff.enrage -> data().effectN( 2 ).percent() + talents.warpaint -> effectN( 1 ).percent() );
-    }
-  }
-
-  if ( ( s -> result == RESULT_DODGE || s -> result == RESULT_PARRY ) && !s -> action -> is_aoe() ) // AoE attacks do not reset revenge.
-  {
-    if ( cooldown.revenge_reset -> up() )
-    {
-      buff.revenge -> trigger();
-      cooldown.revenge_reset -> start();
     }
   }
 
