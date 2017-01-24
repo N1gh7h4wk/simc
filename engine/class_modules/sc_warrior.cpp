@@ -216,6 +216,7 @@ public:
     gain_t* shield_slam;
     gain_t* will_of_the_first_king;
     gain_t* booming_voice;
+    gain_t* thunder_clap;
 
     // Legendarys
     gain_t* ceannar_rage;
@@ -2619,7 +2620,7 @@ struct heroic_charge_t: public warrior_attack_t
 
   bool ready() override
   {
-    if ( p() -> cooldown.charge -> up() && !p() -> buffs.raid_movement -> check() && p() -> heroic_charge == nullptr )
+    if ( p() -> cooldown.charge -> up() && !p() -> buffs.movement -> check() && p() -> heroic_charge == nullptr )
     {
       return warrior_attack_t::ready();
     }
@@ -3483,9 +3484,11 @@ struct storm_bolt_t: public warrior_attack_t
 
 struct thunder_clap_t: public warrior_attack_t
 {
+  double rage_gain;
   double shield_slam_reset;
   thunder_clap_t( warrior_t* p, const std::string& options_str ):
     warrior_attack_t( "thunder_clap", p, p -> spec.thunder_clap ),
+    rage_gain( data().effectN( 4 ).resource( RESOURCE_RAGE ) ),
     shield_slam_reset( p -> spec.devastate -> effectN( 3 ).percent() )
   {
     parse_options( options_str );
@@ -3494,13 +3497,7 @@ struct thunder_clap_t: public warrior_attack_t
     attack_power_mod.direct *= 1.0 + p -> artifact.thunder_crash.percent();
 
     radius *= 1.0 + p -> talents.crackling_thunder -> effectN( 1 ).percent();
-  }
-
-  void execute() override
-  {
-    warrior_attack_t::execute();
-    if ( rng().roll( shield_slam_reset ) )
-      p() -> cooldown.shield_slam -> reset( true );
+    energize_type = ENERGIZE_NONE;
   }
 
   double action_multiplier() const override
@@ -3510,6 +3507,27 @@ struct thunder_clap_t: public warrior_attack_t
     am *= 1.0 + p() -> buff.bindings_of_kakushan -> stack_value();
 
     return am;
+  }
+
+  void execute() override
+  {
+    warrior_attack_t::execute();
+
+    if ( rng().roll( shield_slam_reset ) )
+    {
+      p() -> cooldown.shield_slam -> reset( true );
+    }
+
+    if ( p() -> buff.bindings_of_kakushan -> check() )
+    {
+      p() -> resource_gain( RESOURCE_RAGE, rage_gain * ( 1.0 + p() -> buff.bindings_of_kakushan -> check_value() ) * ( 1.0 + ( p() -> buff.demoralizing_shout -> check() ? p() -> artifact.might_of_the_vrykul.percent() : 0 ) ), p() -> gain.thunder_clap );
+    }
+    else
+    {
+      p() -> resource_gain( RESOURCE_RAGE, rage_gain * ( 1.0 + ( p() -> buff.demoralizing_shout -> check() ? p() -> artifact.might_of_the_vrykul.percent() : 0 ) ), p() -> gain.thunder_clap );
+    }
+
+    p() -> buff.bindings_of_kakushan -> expire();
   }
 };
 
@@ -4881,7 +4899,7 @@ void warrior_t::apl_fury()
   {
     if ( items[i].name_str == "ring_of_collapsing_futures" )
     {
-      default_list -> add_action( "use_item,name=" + items[i].name_str + "if=equipped.ring_of_collapsing_futures&buff.battle_cry.up&buff.enrage.up&!buff.temptation.up" );
+      default_list -> add_action( "use_item,name=" + items[i].name_str + ",if=equipped.ring_of_collapsing_futures&buff.battle_cry.up&buff.enrage.up&!buff.temptation.up" );
     }
     else if ( items[i].name_str != "draught_of_souls" && items[i].has_special_effect( SPECIAL_EFFECT_SOURCE_NONE, SPECIAL_EFFECT_USE ) )
     {
@@ -5576,6 +5594,7 @@ void warrior_t::init_gains()
   gain.shield_slam = get_gain( "shield_slam" );
   gain.will_of_the_first_king = get_gain( "will_of_the_first_king" );
   gain.booming_voice = get_gain( "booming_voice" );
+  gain.thunder_clap = get_gain( "thunder_clap" );
 
   gain.ceannar_rage = get_gain( "ceannar_rage" );
   gain.rage_from_damage_taken = get_gain( "rage_from_damage_taken" );
