@@ -244,6 +244,7 @@ public:
          incanters_flow_stack_mult,
          iv_haste;
   bool blessing_of_wisdom;
+  std::string mage_potion_choice;
 
   // Benefits
   struct benefits_t
@@ -609,6 +610,7 @@ public:
   virtual double    temporary_movement_modifier() const override;
   virtual void      arise() override;
   virtual action_t* select_action( const action_priority_list_t& ) override;
+  virtual void      copy_from( player_t* ) override;
 
   target_specific_t<mage_td_t> target_data;
 
@@ -4320,8 +4322,8 @@ struct flurry_t : public frost_mage_spell_t
     hasted_ticks = false;
     add_child( flurry_bolt );
     //TODO: Remove hardcoded values once it exists in spell data for bolt impact timing.
-    dot_duration = timespan_t::from_seconds( 0.6 );
-    base_tick_time = timespan_t::from_seconds( 0.2 );
+    dot_duration = timespan_t::from_seconds( 0.45 );
+    base_tick_time = timespan_t::from_seconds( 0.15 );
   }
 
   virtual timespan_t travel_time() const override
@@ -6846,6 +6848,12 @@ struct water_jet_t : public action_t
 
   bool ready() override
   {
+    mage_t* m = debug_cast<mage_t*>( player );
+    if ( m -> talents.lonely_winter -> ok() )
+    {
+      return false;
+    }
+
     if ( !action )
       return false;
 
@@ -7195,6 +7203,7 @@ mage_t::mage_t( sim_t* sim, const std::string& name, race_e r ) :
   last_summoned( temporal_hero_e::INVALID ),
   distance_from_rune( 0.0 ),
   global_cinder_count( 0 ),
+  mage_potion_choice ("deadly_grace"),
   incanters_flow_stack_mult( find_spell( 116267 ) -> effectN( 1 ).percent() ),
   iv_haste( 1.0 ),
   blessing_of_wisdom( false ),
@@ -7363,8 +7372,23 @@ void mage_t::create_options()
 {
   add_option( opt_float( "global_cinder_count", global_cinder_count ) );
   add_option( opt_bool( "blessing_of_wisdom", blessing_of_wisdom ) );
+  add_option(opt_string("mage_potion_choice", mage_potion_choice ) );
   player_t::create_options();
 }
+
+// mage_t::copy_from =====================================================
+
+void mage_t::copy_from( player_t* source )
+{
+  player_t::copy_from( source );
+
+  mage_t* p = debug_cast<mage_t*>( source );
+
+  global_cinder_count = p -> global_cinder_count;
+  blessing_of_wisdom = p -> blessing_of_wisdom;
+  mage_potion_choice = p -> mage_potion_choice;
+}
+
 // mage_t::create_pets ========================================================
 
 void mage_t::create_pets()
@@ -7930,16 +7954,19 @@ std::string mage_t::get_special_use_items( const std::string& item_name, bool sp
   std::string actions;
   std::string conditions;
 
-  // If we're dealing with a special item, find its special conditional.
+  // If we're dealing with a special item, find its special conditional for the right spec.
   if ( specials )
   {
-    if ( item_name == "obelisk_of_the_void" )
+    if ( specialization() == MAGE_FIRE )
     {
-      conditions = "if=buff.rune_of_power.up&cooldown.combustion.remains>50";
-    }
-    if ( item_name == "horn_of_valor" )
-    {
-      conditions = "if=cooldown.combustion.remains>30";
+      if ( item_name == "obelisk_of_the_void" )
+      {
+        conditions = "if=buff.rune_of_power.up&cooldown.combustion.remains>50";
+      }
+      if ( item_name == "horn_of_valor" )
+      {
+        conditions = "if=cooldown.combustion.remains>30";
+      }
     }
   }
 
@@ -7969,7 +7996,8 @@ std::string mage_t::get_special_use_items( const std::string& item_name, bool sp
 }
 
 // Because we care about both the ability to control special conditions AND position of our on use items,
-// we must use our own get_item_actions which knows to ignore all "special" items and let them be handled by get_special_use_items()
+// we must use our own get_item_actions which knows to ignore all "special" items so
+// that they can be handled by get_special_use_items()
 std::vector<std::string> mage_t::get_non_speical_item_actions()
 {
   std::vector<std::string> actions;
@@ -7977,8 +8005,10 @@ std::vector<std::string> mage_t::get_non_speical_item_actions()
   std::vector<std::string> specials;
 
   // very ugly construction of our list of special items
-  specials.push_back( "obelisk_of_the_void" );
-  specials.push_back( "horn_of_valor" );
+  specials.push_back( "obelisk_of_the_void"           );
+  specials.push_back( "horn_of_valor"                 );
+  specials.push_back( "mrrgrias_favor"                );
+  specials.push_back( "pharameres_forbidden_grimoire" );
 
   for ( const auto& item : items )
   {
@@ -8141,7 +8171,13 @@ std::string mage_t::get_potion_action()
   }
   else
   {
-    potion_action += "deadly_grace";
+    if (mage_potion_choice == "prolonged_power")
+    {
+      potion_action += "prolonged_power";
+    }
+    else {
+      potion_action += "deadly_grace";
+    }
   }
 
   return potion_action;
@@ -8172,6 +8208,7 @@ void mage_t::apl_arcane()
   default_list -> add_action( mage_t::get_special_use_items( "horn_of_valor", false ) );
   default_list -> add_action( mage_t::get_special_use_items( "obelisk_of_the_void", false ) );
   default_list -> add_action( mage_t::get_special_use_items( "mrrgrias_favor", false ) );
+  default_list -> add_action( mage_t::get_special_use_items( "pharameres_forbidden_grimoire", false ) );
   default_list -> add_action( "call_action_list,name=build,if=buff.arcane_charge.stack<4" );
   default_list -> add_action( "call_action_list,name=init_burn,if=buff.arcane_power.down&buff.arcane_charge.stack=4&(cooldown.mark_of_aluneth.remains=0|cooldown.mark_of_aluneth.remains>20)&(!talent.rune_of_power.enabled|(cooldown.arcane_power.remains<=action.rune_of_power.cast_time|action.rune_of_power.recharge_time<cooldown.arcane_power.remains))|target.time_to_die<45" );
   default_list -> add_action( "call_action_list,name=burn,if=burn_phase" );
@@ -8270,6 +8307,7 @@ void mage_t::apl_fire()
   default_list -> add_action( mage_t::get_special_use_items( "horn_of_valor", true ) );
   default_list -> add_action( mage_t::get_special_use_items( "obelisk_of_the_void", true ) );
   default_list -> add_action( mage_t::get_special_use_items( "mrrgrias_favor", false ) );
+  default_list -> add_action( mage_t::get_special_use_items( "pharameres_forbidden_grimoire", false ) );
 
   default_list -> add_action( "call_action_list,name=combustion_phase,if=cooldown.combustion.remains<=action.rune_of_power.cast_time+(!talent.kindling.enabled*gcd)|buff.combustion.up" );
   default_list -> add_action( "call_action_list,name=rop_phase,if=buff.rune_of_power.up&buff.combustion.down" );
@@ -8352,6 +8390,7 @@ void mage_t::apl_frost()
   default_list -> add_action( mage_t::get_special_use_items( "horn_of_valor", false ) );
   default_list -> add_action( mage_t::get_special_use_items( "obelisk_of_the_void", false ) );
   default_list -> add_action( mage_t::get_special_use_items( "mrrgrias_favor", false ) );
+  default_list -> add_action( mage_t::get_special_use_items( "pharameres_forbidden_grimoire", false ) );
   default_list -> add_action( "call_action_list,name=cooldowns" );
   default_list -> add_action( "call_action_list,name=aoe,if=active_enemies>=4" );
   default_list -> add_action( "call_action_list,name=single" );

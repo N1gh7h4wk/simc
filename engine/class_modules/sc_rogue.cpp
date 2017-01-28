@@ -1605,10 +1605,19 @@ struct insignia_of_ravenholdt_attack_t : public rogue_attack_t
   {
     double m = p() -> spell.insignia_of_ravenholdt -> effectN( 1 ).percent();
 
-    // Rogue Assassination Hidden Passive (Additive, it's +15% on the primary effect)
+    // Rogue Assassination Specific
     if ( p() -> specialization() == ROGUE_ASSASSINATION )
     {
+      // Hidden Passive (Additive, it's +15% on the primary effect)
       m += p() -> spec.assassination_rogue -> effectN( 3 ).percent();
+
+      // It seems that Insignia ignores only Vendetta modifier
+      // See: https://github.com/simulationcraft/simc/issues/3435
+      rogue_td_t* tdata = td( target );
+      if ( tdata -> debuffs.vendetta -> check() )
+      {
+        m *= 1 - tdata -> debuffs.vendetta -> value();
+      }
     }
 
     return m;
@@ -1629,10 +1638,20 @@ struct insignia_of_ravenholdt_attack_t : public rogue_attack_t
 using namespace residual_action;
 struct mutilated_flesh_t : public residual_periodic_action_t<melee_attack_t>
 {
+  rogue_t* rouge;
   mutilated_flesh_t( rogue_t* p ) :
-    residual_periodic_action_t<melee_attack_t>( "mutilated_flesh", p, p -> find_spell( 211672 ) )
+    residual_periodic_action_t<melee_attack_t>( "mutilated_flesh", p, p -> find_spell( 211672 ) ), rouge( p )
   {
     background = true;
+  }
+
+  double calculate_tick_amount( action_state_t* state, double dmg_multiplier ) const override
+  {
+    rogue_td_t* tdata = rouge -> get_target_data( state -> target );
+
+    dmg_multiplier *= 1.0 + rouge -> agonizing_poison_stack_multiplier( tdata );;
+
+    return residual_periodic_action_t::calculate_tick_amount( state, dmg_multiplier );
   }
 };
 
@@ -5343,7 +5362,7 @@ void rogue_t::trigger_blade_flurry( const action_state_t* state )
   // Note, unmitigated damage
   active_blade_flurry -> base_dd_min = state -> result_total;
   active_blade_flurry -> base_dd_max = state -> result_total;
-  active_blade_flurry -> schedule_execute();
+  active_blade_flurry -> execute();
 }
 
 void rogue_t::trigger_combo_point_gain( int     cp,
@@ -6715,13 +6734,9 @@ void rogue_t::init_action_list()
     // Cooldowns
     action_priority_list_t* cds = get_action_priority_list( "cds", "Cooldowns" );
     cds -> add_action( potion_action );
-    for ( size_t i = 0; i < items.size(); i++ )
+    for ( size_t i = 0; i < item_actions.size(); i++ )
     {
-      if ( items[ i ].has_use_special_effect() )
-      {
-        std::string item_action = std::string( "use_item,slot=" ) + items[ i ].slot_name();
-        cds -> add_action( item_action + ",if=buff.bloodlust.react|target.time_to_die<=20|debuff.vendetta.up" );
-      }
+      cds -> add_action( item_actions[i] + ",if=buff.bloodlust.react|target.time_to_die<=20|debuff.vendetta.up" );
     }
     for ( size_t i = 0; i < racial_actions.size(); i++ )
     {
@@ -6850,7 +6865,10 @@ void rogue_t::init_action_list()
     action_priority_list_t* cds = get_action_priority_list( "cds", "Cooldowns" );
     cds -> add_action( potion_action );
     for ( size_t i = 0; i < item_actions.size(); i++ )
-      cds -> add_action( item_actions[i] + ",if=(buff.shadow_blades.up&stealthed.rogue)|target.time_to_die<20" );
+      if ( find_item( "draught_of_souls" ) )
+        cds -> add_action( item_actions[i] + ",if=cooldown.shadow_dance.charges_fractional<2.45&buff.shadow_dance.down" );
+      else
+        cds -> add_action( item_actions[i] + ",if=(buff.shadow_blades.up&stealthed.rogue)|target.time_to_die<20" );
     for ( size_t i = 0; i < racial_actions.size(); i++ )
     {
       if ( racial_actions[i] == "arcane_torrent" )

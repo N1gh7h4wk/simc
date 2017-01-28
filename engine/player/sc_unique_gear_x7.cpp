@@ -1946,6 +1946,7 @@ void item::draught_of_souls( special_effect_t& effect )
       proc_spell_t( "felcrazed_rage", effect.player, effect.trigger(), effect.item )
     {
       aoe = 0; // This does not actually AOE
+      dual = true;
       base_multiplier *= 1.0 + effect.player -> find_specialization_spell( "Unholy Death Knight" ) -> effectN( 4 ).percent();
     }
   };
@@ -1959,7 +1960,7 @@ void item::draught_of_souls( special_effect_t& effect )
       proc_spell_t( "draught_of_souls", effect_.player, effect_.driver(), effect_.item ),
       effect( effect_ ), damage( nullptr )
     {
-      channeled = quiet = tick_zero = true;
+      channeled = tick_zero = true;
       cooldown -> duration = timespan_t::zero();
       hasted_ticks = false;
 
@@ -1972,6 +1973,7 @@ void item::draught_of_souls( special_effect_t& effect )
       if ( damage == nullptr )
       {
         damage = new felcrazed_rage_t( effect );
+        add_child( damage );
       }
     }
 
@@ -2037,7 +2039,11 @@ void item::draught_of_souls( special_effect_t& effect )
       // which by default prohibits player-ready generation.
       if ( was_channeling && player -> readying == nullptr )
       {
-        player -> schedule_ready();
+        // Due to the client not allowing the ability queue here, we have to wait
+        // the amount of lag + how often the key is spammed until the next ability is used.
+        // Modeling this as 2 * lag for now. Might increase to 3 * lag after looking at logs of people using the trinket.
+        timespan_t time = ( player -> world_lag_override ? player -> world_lag : sim -> world_lag ) * 2.0;
+        player -> schedule_ready( time );
       }
     }
   };
@@ -3224,7 +3230,7 @@ static const convergence_cd_t convergence_cds[] =
 
   !!! NOTE !!! NOTE !!! NOTE !!! NOTE !!! NOTE !!! NOTE !!! NOTE !!! */
   { DEATH_KNIGHT_FROST,   { "empower_rune_weapon", "hungering_rune_weapon" } },
-  { DEATH_KNIGHT_UNHOLY,  { "summon_gargoyle" } },
+  { DEATH_KNIGHT_UNHOLY,  { "summon_gargoyle", "dark_arbiter" } },
   { DRUID_FERAL,          { "berserk", "incarnation" } },
   { HUNTER_BEAST_MASTERY, { "aspect_of_the_wild" } },
   { HUNTER_MARKSMANSHIP,  { "trueshot" } },
@@ -3285,15 +3291,61 @@ struct convergence_of_fates_callback_t : public dbc_proc_callback_t
   }
 };
 
+bool player_talent( player_t* player_, const std::string talent )
+{
+  return player_ -> find_talent_spell( talent ) -> ok();
+}
+
 void item::convergence_of_fates( special_effect_t& effect )
 {
-  if ( effect.player -> specialization() == PALADIN_RETRIBUTION )
+  switch ( effect.player -> specialization() )
   {
-    // TODO: there's gotta be a better way to do this - I don't think there is. 
-    if ( effect.player -> find_talent_spell( "Crusade" ) -> ok() )
+    // Blizzard could have explained how they nerfed/buffed these rppm values a lot better by just saying what the the end result is.
+    // This is how I (Collision) calculated the following values:
+    // Ret Paladin
+    // with Avenging Wrath: +250% proc rate
+    // with Crusade : +25 % proc rate
+    // When they say +250% proc rate, they mean +250% based on whatever the rppm was on 2017/01/23.
+    // For Ret, this was 1.2. When the hotfixes hit, the rppm for ret went to 3, which is actually the 250% gain for Avenging Wrath, so we don't have to add any special handling for it.
+    // Ex : 1.2 * 2.5 = 3.0
+    // In order to find the value for Crusade, we do 1.2 * 1.25 = 1.5, we do have to add in special handling for that.
+
+  case PALADIN_RETRIBUTION:
+    if ( player_talent( effect.player, "Crusade" ) )
     {
-      effect.rppm_modifier_ = 0.5;
+      effect.ppm_ = -1.5;
+      effect.rppm_modifier_ = 1.0;
     }
+    break;
+  case MONK_WINDWALKER:
+    if ( player_talent( effect.player, "Serenity" ) )
+    {
+      effect.ppm_ = -1.6;
+      effect.rppm_modifier_ = 1.0;
+    }
+    break;
+  case DEATH_KNIGHT_FROST:
+    if ( player_talent( effect.player, "Hungering Rune Weapon" ) )
+    {
+      effect.ppm_ = -4.62;
+      effect.rppm_modifier_ = 1.0;
+    }
+    break;
+  case DEATH_KNIGHT_UNHOLY:
+    if ( ! player_talent( effect.player, "Dark Arbiter" ) )
+    {
+      effect.ppm_ = -4.98;
+      effect.rppm_modifier_ = 1.0;
+    }
+    break;
+  case DRUID_FERAL:
+    if ( player_talent( effect.player, "Incarnation" ) )
+    {
+      effect.ppm_ = -3.7;
+      effect.rppm_modifier_ = 1.0;
+    }
+    break;
+  default: break;
   }
 
   new convergence_of_fates_callback_t( effect );
