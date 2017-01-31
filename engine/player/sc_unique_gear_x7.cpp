@@ -73,6 +73,7 @@ namespace item
   void eyasus_mulligan( special_effect_t& );
   void marfisis_giant_censer( special_effect_t& );
   void devilsaurs_bite( special_effect_t& );
+  void leyspark(special_effect_t& );
 
   // 7.0 Raid
   void bloodthirsty_instinct( special_effect_t& );
@@ -99,7 +100,7 @@ namespace item
 
   // Adding this here to check it off the list.
   // The sim builds it automatically.
-  //void pharameres_forbidden_grimoire( special_effect_t& );
+  void pharameres_forbidden_grimoire( special_effect_t& );
 
   // Legendary
   void aggramars_stride( special_effect_t& );
@@ -356,12 +357,6 @@ void item::arans_relaxing_ruby( special_effect_t& effect )
   if ( ! action )
   {
     action = effect.player -> create_proc_action( "flame_wreath", effect );
-  }
-
-  // Adjust frost base RPPM: https://www.altered-time.com/forum/viewtopic.php?f=2&t=3416
-  if ( effect.player -> specialization() == MAGE_FROST )
-  {
-    effect.ppm_ = -1.35;
   }
 
   if ( ! action )
@@ -1420,9 +1415,7 @@ void item::nightblooming_frond( special_effect_t& effect )
     {
       double m = proc_attack_t::action_multiplier();
 
-      // FIXME: As of 01/22/2017, the increase has been reduced to 50% of effectiveness per stack
-      // Check if it stays like this in the upcoming trinkets hotfix(es).
-      m *= 1.0 + (recursive_strikes_buff -> stack() * 0.5);
+      m *= recursive_strikes_buff -> stack();
 
       return m;
     }
@@ -1439,8 +1432,11 @@ void item::nightblooming_frond( special_effect_t& effect )
     void execute( action_t*, action_state_t* state ) override
     {
       proc_buff -> trigger();
-      proc_action -> target = target( state );
-      proc_action -> execute();
+      if ( proc_buff -> check() > 1 )
+      {
+        proc_action -> target = target( state );
+        proc_action -> execute();
+      }
     }
   };
 
@@ -1552,6 +1548,98 @@ void item::might_of_krosus( special_effect_t& effect )
   if ( a == nullptr )
   {
     a = new colossal_slam_t( effect );
+  }
+
+  effect.execute_action = a;
+}
+
+void item::pharameres_forbidden_grimoire( special_effect_t& effect )
+{
+  struct orb_of_destruction_impact_t : public spell_t
+  {
+    orb_of_destruction_impact_t( const special_effect_t& effect ) :
+      spell_t( "orb_of_destruction_impact", effect.player, effect.driver() ->effectN( 1 ).trigger() )
+    {
+      background = may_crit = true;
+      aoe = -1;
+      base_dd_min = base_dd_max = data().effectN( 1 ).average( effect.item );
+    }
+
+    double composite_target_multiplier( player_t* t ) const override
+    {
+      double am = spell_t::composite_target_multiplier( t );
+      //Formula for the damage reduction due to distance from the original target seems to fit
+      // damage_reduction = 1 - ( distance / 30 ) ^ 2
+      // Data used to find this approximation:
+      /* Distance, Damage Done
+         0.0,      506675
+         7.32e-5,  506669
+         2.3087,   503726
+         3.2249,   500923
+         5.8694,   487644
+         6.3789,   483542
+         7.7104,   470934
+         8.2765,   467706
+         10.2108,  448322
+         11.6349,  430007
+         12.1807,  423206
+         13.2231,  408371
+         16.2364,  358321
+         18.071,   323028
+         19.9642,  283293
+         20.0721,  0
+      */
+      am *= 1.0 - std::pow( std::min( target -> get_player_distance( *t ), 20.0 ) / 30.0, 2 );
+      return am;
+    }
+  };
+
+  struct orb_of_destruction_t : public spell_t
+  {
+    double min_range;
+    orb_of_destruction_impact_t* impact;
+    orb_of_destruction_t( const special_effect_t& effect ) :
+      spell_t( "orb_of_destruction", effect.player, effect.driver() ),
+      impact( nullptr )
+    {
+      callbacks = false;
+      background = true;
+      impact = new orb_of_destruction_impact_t( effect );
+      add_child( impact );
+    }
+
+    void init() override
+    {
+      spell_t::init();
+      if ( player -> base.distance < 20 )
+        sim ->errorf( "Pharamere's Forbidden Grimoire can only be used when more than 20 yards away from the target. This warning will display when a melee tries to equip the trinket." );
+    }
+
+    bool ready() override
+    {
+      if ( player -> get_player_distance( *target ) < min_range )
+      {
+        return false;
+      }
+      return spell_t::ready();
+    }
+
+    void execute()
+    {
+      impact -> target = target;
+      impact -> execute();
+    }
+  };
+
+  action_t* a = effect.player -> find_action( "orb_of_destruction" );
+  if ( a == nullptr )
+  {
+    a = effect.player -> create_proc_action( "orb_of_destruction", effect );
+  }
+
+  if ( a == nullptr )
+  {
+    a = new orb_of_destruction_t( effect );
   }
 
   effect.execute_action = a;
@@ -1961,6 +2049,7 @@ void item::draught_of_souls( special_effect_t& effect )
       effect( effect_ ), damage( nullptr )
     {
       channeled = tick_zero = true;
+      interrupt_auto_attack = false;
       cooldown -> duration = timespan_t::zero();
       hasted_ticks = false;
 
@@ -3054,6 +3143,37 @@ void item::devilsaurs_bite( special_effect_t& effect )
   new dbc_proc_callback_t( effect.item, effect );
 }
 
+// Ley Spark =========================================================
+
+void item::leyspark( special_effect_t& effect )
+{
+  struct sparking_driver_t : public buff_t
+  {
+    stat_buff_t* sparking_;
+    sparking_driver_t( const special_effect_t& effect, stat_buff_t* sparking ) :
+      buff_t( buff_creator_t( effect.player, "sparking_driver", effect.driver() -> effectN( 1 ).trigger() )
+              .tick_callback( [sparking]( buff_t*, int, const timespan_t& ) { sparking -> trigger( 1 ); } ) ),
+      sparking_( sparking )
+    {
+    }
+
+    void expire_override( int expiration_stacks, timespan_t remaining_duration ) override
+    {
+      buff_t::expire_override( expiration_stacks, remaining_duration );
+
+      sparking_ -> expire();
+    }
+  };
+
+  stat_buff_t* sparking = stat_buff_creator_t( effect.player, "sparking", effect.driver() -> effectN( 1 ).trigger() -> effectN( 1 ).trigger() )
+    .default_value( effect.driver() -> effectN( 1 ).trigger() -> effectN( 1 ).trigger() -> effectN( 1 ).average( effect.item ) )
+    .add_invalidate( CACHE_AGILITY );
+
+  effect.custom_buff = new sparking_driver_t( effect, sparking );
+
+  new dbc_proc_callback_t( effect.item, effect );
+}
+
 // Spontaneous Appendages ===================================================
 struct spontaneous_appendages_t: public proc_spell_t
 {
@@ -3339,7 +3459,7 @@ void item::convergence_of_fates( special_effect_t& effect )
     }
     break;
   case DRUID_FERAL:
-    if ( player_talent( effect.player, "Incarnation" ) )
+    if ( player_talent( effect.player, "Incarnation: King of the Jungle" ) )
     {
       effect.ppm_ = -3.7;
       effect.rppm_modifier_ = 1.0;
@@ -4244,6 +4364,7 @@ void unique_gear::register_special_effects_x7()
   register_special_effect( 225142, item::whispers_in_the_dark    );
   register_special_effect( 225135, item::nightblooming_frond     );
   register_special_effect( 225132, item::might_of_krosus         );
+  register_special_effect( 225133, item::pharameres_forbidden_grimoire );
 
   /* Legion 7.0 Misc */
   register_special_effect( 188026, item::infernal_alchemist_stone       );
@@ -4254,6 +4375,7 @@ void unique_gear::register_special_effects_x7()
   register_special_effect( 227388, item::eyasus_mulligan                );
   register_special_effect( 228141, item::marfisis_giant_censer          );
   register_special_effect( 224073, item::devilsaurs_bite                );
+  register_special_effect( 231941, item::leyspark                       );
 
   /* Legion Enchants */
   register_special_effect( 190888, "190909trigger" );
