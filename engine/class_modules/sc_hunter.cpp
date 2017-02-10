@@ -328,6 +328,7 @@ public:
     const spell_data_t* muzzle;
     const spell_data_t* lacerate;
     const spell_data_t* aspect_of_the_eagle;
+    const spell_data_t* aspect_of_the_eagle_2;
     const spell_data_t* carve;
     const spell_data_t* survivalist;
     const spell_data_t* explosive_trap;
@@ -1123,6 +1124,7 @@ public:
     buff_t* titans_frenzy;
     buff_t* tier17_4pc_bm;
     buff_t* tier18_4pc_bm;
+    buff_t* tier19_2pc_bm;
   } buffs;
 
   // Gains
@@ -1327,6 +1329,11 @@ public:
       buff_creator_t( this, "tier18_4pc_bm" )
         .default_value( owner -> find_spell( 178875 ) -> effectN( 2 ).percent() )
         .add_invalidate( CACHE_PLAYER_DAMAGE_MULTIPLIER );
+
+    buffs.tier19_2pc_bm =
+      buff_creator_t( this, 211183, "tier19_2pc_bm" )
+        .default_value( .1 ) // XXX: ptr spell data has it as the second effect of 211183
+        .add_invalidate( CACHE_PLAYER_DAMAGE_MULTIPLIER );
   }
 
   virtual void init_gains() override
@@ -1374,7 +1381,7 @@ public:
       ac += buffs.aspect_of_the_wild -> check_value();
 
     if ( o() -> buffs.aspect_of_the_eagle -> up() )
-      ac += o() -> specs.aspect_of_the_eagle -> effectN( 1 ).percent();
+      ac += o() -> specs.aspect_of_the_eagle_2 -> effectN( 1 ).percent();
 
     return ac;
   }
@@ -1475,6 +1482,9 @@ public:
     // from Nimox: 178875 is the 4pc BM pet damage buff
     if ( buffs.tier17_4pc_bm -> up() )
       m *= 1.0 + buffs.tier17_4pc_bm -> current_value;
+
+    if ( buffs.tier19_2pc_bm -> up() )
+      m *= 1.0 + buffs.tier19_2pc_bm -> check_value();
 
     // Pet combat experience
     m *= 1.0 + specs.combat_experience -> effectN( 2 ).percent();
@@ -4742,6 +4752,10 @@ struct bestial_wrath_t: public hunter_spell_t
     p() -> active.pet -> buffs.bestial_wrath -> trigger();
     if ( p() -> sets.has_set_bonus( HUNTER_BEAST_MASTERY, T19, B2 ) )
     {
+      // 2017-02-06 hotfix: "With the Dire Frenzy talent, the Eagletalon Battlegear Beast Mastery 2-piece bonus should now grant your pet 10% increased damage for 15 seconds."
+      if ( p() -> talents.dire_frenzy -> ok() )
+          p() -> active.pet -> buffs.tier19_2pc_bm -> trigger();
+
       for ( size_t i = 0; i < p() -> pets.dire_beasts.size(); i++ )
       {
         if ( ! p() -> pets.dire_beasts[ i ] -> is_sleeping() )
@@ -5564,23 +5578,7 @@ pet_t* hunter_t::create_pet( const std::string& pet_name,
 
 void hunter_t::create_pets()
 {
-  size_t create_pets = 1;
-  if ( talents.stampede -> ok() ) // We only need to create 1 main pet if we are not using the stampede talent.
-    create_pets += 4;
-  for ( size_t i = 0; i < create_pets; i++ )
-  {
-    if ( !talents.stampede -> ok() )
-      create_pet( summon_pet_str, summon_pet_str );
-    else
-    {
-      create_pet( "raptor", "raptor" );
-      create_pet( "wolf", "wolf" );
-      create_pet( "hyena", "hyena" );
-      create_pet( "devilsaur", "devilsaur" );
-      create_pet( "cat", "cat" );
-      break;
-    }
-  }
+  create_pet( summon_pet_str, summon_pet_str );
 
   if ( sets.has_set_bonus( HUNTER_BEAST_MASTERY, T17, B4 ) )
   {
@@ -5725,6 +5723,7 @@ void hunter_t::init_spells()
   specs.harpoon              = find_specialization_spell( "Harpoon" );
   specs.lacerate             = find_specialization_spell( "Lacerate" );
   specs.aspect_of_the_eagle  = find_specialization_spell( "Aspect of the Eagle" );
+  specs.aspect_of_the_eagle_2= find_specialization_spell( 231555 );
   specs.carve                = find_specialization_spell( "Carve" );
   specs.explosive_trap       = find_specialization_spell( "Explosive Trap" );
   specs.marksmans_focus      = find_specialization_spell( "Marksman's Focus" );
@@ -6206,7 +6205,7 @@ void hunter_t::init_action_list()
       else if ( specialization() == HUNTER_MARKSMANSHIP )
         food_action += "nightborne_delicacy_platter";
       else
-        food_action += "fishbrul_special";
+        food_action += "azshari_salad";
       precombat -> add_action( food_action );
     }
 
@@ -6219,7 +6218,7 @@ void hunter_t::init_action_list()
       if ( true_level > 100 )
       {
         if ( specialization() == HUNTER_SURVIVAL )
-          precombat -> add_action( "potion,name=old_war" );
+          precombat -> add_action( "potion,name=prolonged_power" );
         else if ( specialization() == HUNTER_BEAST_MASTERY )
         {
           precombat -> add_action( "potion,name=prolonged_power" );
@@ -6291,8 +6290,8 @@ void hunter_t::add_racial_actions(action_priority_list_t* list)
   else if ( specialization() == HUNTER_SURVIVAL )
   {
     list->add_action( "arcane_torrent,if=focus.deficit>=30" );
-    list->add_action( "berserking,if=buff.spitting_cobra.up|!talent.spitting_cobra.enabled&buff.aspect_of_the_eagle.up" );
-    list->add_action( "blood_fury,if=buff.spitting_cobra.up|!talent.spitting_cobra.enabled&buff.aspect_of_the_eagle.up" );
+    list->add_action( "berserking,if=buff.spitting_cobra.up&buff.mongoose_fury.stack>2&buff.aspect_of_the_eagle.up|!talent.spitting_cobra.enabled&buff.aspect_of_the_eagle.up" );
+    list->add_action( "blood_fury,if=buff.spitting_cobra.up&buff.mongoose_fury.stack>2&buff.aspect_of_the_eagle.up|!talent.spitting_cobra.enabled&buff.aspect_of_the_eagle.up" );
   }
   else {
     list->add_action("arcane_torrent,if=focus.deficit>=30");
@@ -6444,7 +6443,8 @@ void hunter_t::apl_surv()
   action_priority_list_t* moknathal    = get_action_priority_list( "moknathal" );
   action_priority_list_t* nomok        = get_action_priority_list( "nomok" );
 
-  precombat -> add_action( "explosive_trap" );
+  precombat -> add_action( "explosive_trap,if=!talent.steel_trap.enabled" );
+  precombat -> add_action( "steel_trap" );
   precombat -> add_action( "dragonsfire_grenade" );
   precombat -> add_action( "harpoon" );
 
@@ -6453,29 +6453,29 @@ void hunter_t::apl_surv()
   add_racial_actions( default_list );
   add_item_actions( default_list );
 
-  default_list -> add_action( "potion,name=old_war,if=buff.aspect_of_the_eagle.remains" );
+  default_list -> add_action( "potion,name=prolonged_power,if=buff.spitting_cobra.up" );
   default_list -> add_action( "call_action_list,name=moknathal,if=talent.way_of_the_moknathal.enabled" );
   default_list -> add_action( "call_action_list,name=nomok,if=!talent.way_of_the_moknathal.enabled" );
 
   moknathal -> add_action( "raptor_strike,if=buff.moknathal_tactics.stack<=1" );
   moknathal -> add_action( "raptor_strike,if=buff.moknathal_tactics.remains<gcd" );
-  moknathal -> add_action( "snake_hunter,if=cooldown.mongoose_bite.charges<=0&buff.mongoose_fury.remains>3*gcd" );
+  moknathal -> add_action( "snake_hunter,if=cooldown.mongoose_bite.charges<=0&buff.mongoose_fury.remains>3*gcd&time>15" );
   moknathal -> add_action( "a_murder_of_crows,if=focus>55&buff.mongoose_fury.stack<4&buff.mongoose_fury.duration>=gcd" );
-  moknathal -> add_action( "steel_trap,if=buff.mongoose_fury.duration>=gcd&buff.mongoose_fury.stack<4" );
-  moknathal -> add_action( "caltrops,if=(buff.mongoose_fury.duration>=gcd&buff.mongoose_fury.stack<4&!dot.caltrops.ticking)" );
-  moknathal -> add_action( "flanking_strike,if=cooldown.mongoose_bite.charges<=0&buff.aspect_of_the_eagle.remains>=gcd&focus>75" );
-  moknathal -> add_action( "lacerate,if=focus>60&buff.mongoose_fury.duration>=gcd&dot.lacerate.remains<=3&cooldown.mongoose_bite.charges>=0&buff.mongoose_fury.stack<4" );
+  moknathal -> add_action( "flanking_strike,if=cooldown.mongoose_bite.charges<=1&buff.aspect_of_the_eagle.remains>=gcd|cooldown.mongoose_bite.charges<=1&buff.aspect_of_the_eagle.down" );
+  moknathal -> add_action( "lacerate,if=(focus>60&buff.mongoose_fury.duration>=gcd&refreshable&cooldown.mongoose_bite.charges=0&buff.mongoose_fury.stack<3)|(buff.mongoose_fury.down&cooldown.mongoose_bite.charges<3&refreshable)" );
+  moknathal -> add_action( "caltrops,if=(buff.mongoose_fury.duration>=gcd&buff.mongoose_fury.stack<1&!dot.caltrops.ticking)" );
   moknathal -> add_action( "spitting_cobra,if=buff.mongoose_fury.duration>=gcd&cooldown.mongoose_bite.charges>=0&buff.mongoose_fury.stack<4&buff.moknathal_tactics.stack=4" );
-  moknathal -> add_action( "steel_trap,if=buff.mongoose_fury.duration>=gcd&buff.mongoose_fury.stack<4" );
-  moknathal -> add_action( "explosive_trap,if=buff.mongoose_fury.duration>=gcd&cooldown.mongoose_bite.charges>=0&buff.mongoose_fury.stack<4" );
-  moknathal -> add_action( "dragonsfire_grenade,if=buff.mongoose_fury.duration>=gcd&cooldown.mongoose_bite.charges>=0&buff.mongoose_fury.stack<4" );
+  moknathal -> add_action( "steel_trap,if=buff.mongoose_fury.duration>=gcd&buff.mongoose_fury.stack<1" );
+  moknathal -> add_action( "explosive_trap,if=buff.mongoose_fury.duration>=gcd&cooldown.mongoose_bite.charges=0&buff.mongoose_fury.stack<1" );
+  moknathal -> add_action( "dragonsfire_grenade,if=buff.mongoose_fury.duration>=gcd&cooldown.mongoose_bite.charges>=0&buff.mongoose_fury.stack<1" );
   moknathal -> add_action( "raptor_strike,if=talent.serpent_sting.enabled&dot.serpent_sting.remains<gcd" );
   moknathal -> add_action( "raptor_strike,if=buff.moknathal_tactics.remains<4&buff.mongoose_fury.stack=6&buff.mongoose_fury.remains>=gcd" );
-  moknathal -> add_action( "fury_of_the_eagle,if=buff.moknathal_tactics.remains>4&buff.mongoose_fury.stack=6&cooldown.mongoose_bite.charges<=2" );
+  moknathal -> add_action( "fury_of_the_eagle,if=buff.moknathal_tactics.remains>4&buff.mongoose_fury.stack=6&cooldown.mongoose_bite.charges<=1" );
   moknathal -> add_action( "mongoose_bite,if=buff.aspect_of_the_eagle.up&buff.mongoose_fury.up&buff.moknathal_tactics.stack>=4" );
-  moknathal -> add_action( "fury_of_the_eagle,if=(buff.moknathal_tactics.remains>4&(buff.mongoose_fury.stack=6&cooldown.mongoose_bite.charges<=0|buff.mongoose_fury.up&buff.mongoose_fury.remains<=2*gcd))" );
+  moknathal -> add_action( "fury_of_the_eagle,if=(buff.moknathal_tactics.remains>4&(buff.mongoose_fury.stack=6&cooldown.mongoose_bite.charges<=1|buff.mongoose_fury.up&buff.mongoose_fury.remains<=2*gcd))" );
   moknathal -> add_action( "raptor_strike,if=buff.moknathal_tactics.stack<=3" );
-  moknathal -> add_action( "aspect_of_the_eagle,if=buff.mongoose_fury.up&buff.mongoose_fury.remains>6&cooldown.mongoose_bite.charges>=2" );
+  moknathal -> add_action( "aspect_of_the_eagle,if=buff.mongoose_fury.stack>1" );
+  moknathal -> add_action( "aspect_of_the_eagle,if=buff.mongoose_fury.up&buff.mongoose_fury.remains>6&cooldown.mongoose_bite.charges<2" );
   moknathal -> add_action( "flanking_strike,if=cooldown.mongoose_bite.charges<=2&buff.mongoose_fury.remains>(1+action.mongoose_bite.charges*gcd)&focus>75" );
   moknathal -> add_action( "mongoose_bite,if=buff.mongoose_fury.up&buff.mongoose_fury.remains<cooldown.aspect_of_the_eagle.remains" );
   moknathal -> add_action( "a_murder_of_crows,if=focus>55" );
@@ -6483,30 +6483,28 @@ void hunter_t::apl_surv()
   moknathal -> add_action( "steel_trap" );
   moknathal -> add_action( "explosive_trap" );
   moknathal -> add_action( "caltrops,if=(!dot.caltrops.ticking)" );
-  moknathal -> add_action( "lacerate,if=(!dot.lacerate.ticking|dot.lacerate.remains<3)" );
+  moknathal -> add_action( "lacerate,if=refreshable" );
   moknathal -> add_action( "dragonsfire_grenade" );
   moknathal -> add_action( "butchery,if=(charges=3&focus>65)" );
   moknathal -> add_action( "mongoose_bite,if=(charges>=2&cooldown.mongoose_bite.remains<=gcd|charges=3)" );
   moknathal -> add_action( "butchery,if=focus>65" );
-  moknathal -> add_action( "flanking_strike,if=focus>75" );
   moknathal -> add_action( "raptor_strike,if=focus>75-cooldown.flanking_strike.remains*focus.regen" );
 
   nomok -> add_action( "a_murder_of_crows,if=cooldown.mongoose_bite.charges>=0&buff.mongoose_fury.stack<4" );
-  nomok -> add_action( "snake_hunter,if=action.mongoose_bite.charges<=0&buff.mongoose_fury.remains>3*gcd" );
-  nomok -> add_action( "steel_trap,if=buff.mongoose_fury.duration>=gcd&buff.mongoose_fury.stack<4" );
+  nomok -> add_action( "snake_hunter,if=action.mongoose_bite.charges<=0&buff.mongoose_fury.remains>3*gcd&time>15" );
   nomok -> add_action( "caltrops,if=(buff.mongoose_fury.duration>=gcd&buff.mongoose_fury.stack<4&!dot.caltrops.ticking)" );
   nomok -> add_action( "flanking_strike,if=cooldown.mongoose_bite.charges<=0&buff.aspect_of_the_eagle.remains>=gcd" );
-  nomok -> add_action( "lacerate,if=buff.mongoose_fury.duration>=gcd&dot.lacerate.remains<=1&&cooldown.mongoose_bite.charges>=0&buff.mongoose_fury.stack<4" );
+  nomok -> add_action( "lacerate,if=buff.mongoose_fury.duration>=gcd&refreshable&cooldown.mongoose_bite.charges=0&buff.mongoose_fury.stack<2|buff.mongoose_fury.down&cooldown.mongoose_bite.charges<3&refreshable" );
   nomok -> add_action( "spitting_cobra,if=buff.mongoose_fury.duration>=gcd&cooldown.mongoose_bite.charges>=0&buff.mongoose_fury.stack<4" );
-  nomok -> add_action( "steel_trap,if=buff.mongoose_fury.duration>=gcd&buff.mongoose_fury.stack<4" );
+  nomok -> add_action( "steel_trap,if=buff.mongoose_fury.duration>=gcd&buff.mongoose_fury.stack<3&cooldown.mongoose_bite.charges<1" );
+  nomok -> add_action( "dragonsfire_grenade,if=buff.mongoose_fury.duration>=gcd&cooldown.mongoose_bite.charges<=1&buff.mongoose_fury.stack<3|buff.mongoose_fury.down&cooldown.mongoose_bite.charges<3" );
   nomok -> add_action( "explosive_trap,if=buff.mongoose_fury.duration>=gcd&cooldown.mongoose_bite.charges>=0&buff.mongoose_fury.stack<4" );
-  nomok -> add_action( "dragonsfire_grenade,if=buff.mongoose_fury.duration>=gcd&cooldown.mongoose_bite.charges>=0&buff.mongoose_fury.stack<4" );
-  nomok -> add_action( "raptor_strike,if=talent.serpent_sting.enabled&dot.serpent_sting.remains<gcd" );
-  nomok -> add_action( "fury_of_the_eagle,if=buff.mongoose_fury.stack=6&cooldown.mongoose_bite.charges<=2" );
+  nomok -> add_action( "raptor_strike,if=talent.serpent_sting.enabled&refreshable&buff.mongoose_fury.stack<3&cooldown.mongoose_bite.charges<1" );
+  nomok -> add_action( "fury_of_the_eagle,if=buff.mongoose_fury.stack=6&cooldown.mongoose_bite.charges<=1" );
   nomok -> add_action( "mongoose_bite,if=buff.aspect_of_the_eagle.up&buff.mongoose_fury.up" );
   nomok -> add_action( "aspect_of_the_eagle,if=buff.mongoose_fury.up&buff.mongoose_fury.duration>6&cooldown.mongoose_bite.charges>=2" );
-  nomok -> add_action( "fury_of_the_eagle,if=cooldown.mongoose_bite.charges<=0&buff.mongoose_fury.duration>6" );
-  nomok -> add_action( "flanking_strike,if=cooldown.mongoose_bite.charges<2&buff.mongoose_fury.remains>(1+action.mongoose_bite.charges*gcd)" );
+  nomok -> add_action( "fury_of_the_eagle,if=cooldown.mongoose_bite.charges<=1&buff.mongoose_fury.duration>6" );
+  nomok -> add_action( "flanking_strike,if=cooldown.mongoose_bite.charges<=1&buff.mongoose_fury.remains>(1+action.mongoose_bite.charges*gcd)" );
   nomok -> add_action( "mongoose_bite,if=buff.mongoose_fury.up&buff.mongoose_fury.remains<cooldown.aspect_of_the_eagle.remains" );
   nomok -> add_action( "flanking_strike,if=talent.animal_instincts.enabled&cooldown.mongoose_bite.charges<3" );
   nomok -> add_action( "a_murder_of_crows" );
@@ -6514,7 +6512,7 @@ void hunter_t::apl_surv()
   nomok -> add_action( "steel_trap" );
   nomok -> add_action( "explosive_trap" );
   nomok -> add_action( "caltrops,if=(!dot.caltrops.ticking)" );
-  nomok -> add_action( "lacerate,if=(!dot.lacerate.ticking|dot.lacerate.remains<3)" );
+  nomok -> add_action( "lacerate,if=refreshable" );
   nomok -> add_action( "dragonsfire_grenade" );
   nomok -> add_action( "butchery,if=(charges=3)" );
   nomok -> add_action( "throwing_axes,if=cooldown.throwing_axes.charges=2" );
@@ -6597,7 +6595,7 @@ double hunter_t::composite_melee_crit_chance() const
     crit += buffs.aspect_of_the_wild -> check_value();
 
   if ( buffs.aspect_of_the_eagle -> up() )
-    crit += specs.aspect_of_the_eagle -> effectN( 1 ).percent();
+    crit += specs.aspect_of_the_eagle_2 -> effectN( 1 ).percent();
 
   crit +=  specs.critical_strikes -> effectN( 1 ).percent();
 
@@ -6617,7 +6615,7 @@ double hunter_t::composite_spell_crit_chance() const
     crit += buffs.aspect_of_the_wild -> check_value();
 
   if ( buffs.aspect_of_the_eagle -> up() )
-    crit += specs.aspect_of_the_eagle -> effectN( 1 ).percent();
+    crit += specs.aspect_of_the_eagle_2 -> effectN( 1 ).percent();
 
   crit +=  specs.critical_strikes -> effectN( 1 ).percent();
 
