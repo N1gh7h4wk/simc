@@ -219,11 +219,11 @@ public:
     action_t* lightning_strike;
     spell_t*  electrocute;
     action_t* volcanic_inferno;
-    spell_t* seismic_storm;
+    spell_t*  seismic_storm;
     spell_t*  lightning_shield;
     spell_t*  earthen_rage;
-    spell_t* crashing_storm;
-    spell_t* doom_vortex_ll, * doom_vortex_lb;
+    spell_t*  crashing_storm;
+    spell_t*  doom_vortex_ll, * doom_vortex_lb;
     action_t* lightning_rod;
     action_t* ppsg; // Pristine Proto-Scale Girdle legendary dot
     action_t* storm_tempests; // Storm Tempests legendary damage spell
@@ -302,6 +302,7 @@ public:
     buff_t* eotn_fire;
     buff_t* eotn_shock;
     buff_t* eotn_chill;
+    haste_buff_t* sephuzs_secret;
 
     // Artifact related buffs
     buff_t* stormkeeper;
@@ -363,6 +364,7 @@ public:
   // Various legendary related values
   struct legendary_t
   {
+    bool sephuzs_secret;
   } legendary;
 
   // Class Specializations
@@ -483,6 +485,7 @@ public:
     artifact_power_t seismic_storm;
     artifact_power_t elemental_destabilization;
     artifact_power_t swelling_maelstrom;
+    artifact_power_t power_of_the_earthen_ring;
 
     // Enhancement
     artifact_power_t doom_winds;
@@ -2353,7 +2356,6 @@ struct fire_elemental_t : public primal_elemental_t
 
 struct storm_elemental_t : public primal_elemental_t
 {
-  // TODO: Healing
   struct wind_gust_t : public pet_spell_t<storm_elemental_t>
   {
     const spell_data_t* energize;
@@ -2416,7 +2418,6 @@ struct storm_elemental_t : public primal_elemental_t
   {
     double m = primal_elemental_t::composite_player_multiplier( school );
 
-    // TODO-WOD: Enhance/Elemental has damage, Restoration has healing
     if ( call_lightning -> up() )
       m *= 1.0 + call_lightning -> data().effectN( 2 ).percent();
 
@@ -4838,6 +4839,11 @@ struct earthquake_damage_t : public shaman_spell_t
       p() -> action.seismic_storm -> target = state -> target;
       p() -> action.seismic_storm -> execute();
     }
+
+    if( execute_state->target->type == ENEMY_ADD && p()->legendary.sephuzs_secret && rng().roll( 0.1 ))
+    {
+      p()->buff.sephuzs_secret->trigger();
+    }
   }
 };
 
@@ -4920,7 +4926,7 @@ struct earth_shock_t : public shaman_spell_t
     tdbp_proc_chance( 0 )
   {
     base_multiplier *= 1.0 + player -> artifact.earthen_attunement.percent();
-	secondary_costs[ RESOURCE_MAELSTROM ] += player -> artifact.swelling_maelstrom.data().effectN( 1 ).base_value();
+  secondary_costs[ RESOURCE_MAELSTROM ] += player -> artifact.swelling_maelstrom.data().effectN( 1 ).base_value();
   }
 
   double spell_direct_power_coefficient( const action_state_t* ) const override
@@ -4974,6 +4980,22 @@ struct flame_shock_t : public shaman_spell_t
     }
   }
 
+  double composite_target_crit_chance(player_t* t) const override
+  {
+    double m = shaman_spell_t::composite_target_crit_chance(t);
+
+    if ( player -> sets.has_set_bonus( SHAMAN_ELEMENTAL, T20, B2) &&
+      ( p() -> pet.guardian_fire_elemental  && ! p() -> pet.guardian_fire_elemental   -> is_sleeping() ||
+        p() -> pet.guardian_storm_elemental && ! p() -> pet.guardian_storm_elemental  -> is_sleeping() ||
+        p() -> pet.pet_fire_elemental       && ! p() -> pet.pet_fire_elemental        -> is_sleeping() ||
+        p() -> pet.pet_storm_elemental      && ! p() -> pet.pet_storm_elemental       -> is_sleeping() )  )
+    {
+      m = 1.0;
+    }
+
+    return m;
+  }
+
   timespan_t composite_dot_duration( const action_state_t* ) const override
   { return ( dot_duration + duration_per_maelstrom * cost() ) * duration_multiplier; }
 
@@ -4984,6 +5006,15 @@ struct flame_shock_t : public shaman_spell_t
     if ( p() -> buff.ember_totem -> up() )
     {
       m *= p () -> buff.ember_totem -> check_value();
+    }
+
+    if (player->sets.has_set_bonus( SHAMAN_ELEMENTAL, T20, B2 ) &&
+      ( p() -> pet.guardian_fire_elemental  && ! p() -> pet.guardian_fire_elemental   -> is_sleeping() ||
+        p() -> pet.guardian_storm_elemental && ! p() -> pet.guardian_storm_elemental  -> is_sleeping() ||
+        p() -> pet.pet_fire_elemental       && ! p() -> pet.pet_fire_elemental        -> is_sleeping() ||
+        p() -> pet.pet_storm_elemental      && ! p() -> pet.pet_storm_elemental       -> is_sleeping()  ) )
+    {
+      m *= 1 + p() -> sets.set( SHAMAN_ELEMENTAL, T20, B2 ) -> effectN(1).percent();
     }
 
     return m;
@@ -5011,6 +5042,12 @@ struct flame_shock_t : public shaman_spell_t
       }
 
       p() -> buff.lava_surge -> trigger();
+    }
+
+    if ( d -> state -> result == RESULT_CRIT )
+    {
+      p() -> cooldown.fire_elemental  -> adjust( timespan_t::from_seconds( -1.0 * p() -> sets.set( SHAMAN_ELEMENTAL, T20, B4 ) -> effectN(1).base_value() / 10.0 ) );
+      p() -> cooldown.storm_elemental -> adjust( timespan_t::from_seconds( -1.0 * p() -> sets.set( SHAMAN_ELEMENTAL, T20, B4 ) -> effectN(2).base_value() / 10.0 ) );
     }
   }
 };
@@ -5063,6 +5100,17 @@ struct wind_shear_t : public shaman_spell_t
     if ( ! target -> debuffs.casting -> check() ) return false;
     return shaman_spell_t::ready();
   }
+
+  void execute() override
+  {
+    shaman_spell_t::execute();
+
+    if (p()->legendary.sephuzs_secret)
+    {
+      p()->buff.sephuzs_secret->trigger();
+    }
+  }
+
 };
 
 // Ascendancy Spell =========================================================
@@ -5688,6 +5736,27 @@ struct flametongue_buff_t : public buff_t
   }
 };
 
+struct sephuzs_secret_buff_t : public haste_buff_t
+{
+  cooldown_t* icd;
+  sephuzs_secret_buff_t(shaman_t* p) :
+    haste_buff_t(haste_buff_creator_t(p, "sephuzs_secret", p -> find_spell(208052))
+      .default_value(p -> find_spell(208052) -> effectN(2).percent())
+      .add_invalidate(CACHE_HASTE))
+  {
+    icd = p->get_cooldown("sephuzs_secret_cooldown");
+    icd->duration = p->find_spell(226262)->duration();
+  }
+
+  void execute(int stacks, double value, timespan_t duration) override
+  {
+    if (icd->down())
+      return;
+    buff_t::execute(stacks, value, duration);
+    icd->start();
+  }
+};
+
 // ==========================================================================
 // Shaman Character Definition
 // ==========================================================================
@@ -6116,6 +6185,7 @@ void shaman_t::init_spells()
   artifact.swelling_maelstrom        = find_artifact_spell( "Swelling Maelstrom" );
   artifact.seismic_storm             = find_artifact_spell( "Seismic Storm"      );
   artifact.stormkeepers_power        = find_artifact_spell( "Stormkeeper's Power" );
+  artifact.power_of_the_earthen_ring = find_artifact_spell( "Power of the Earthen Ring" );
 
   // Enhancement
   artifact.doom_winds                = find_artifact_spell( "Doom Winds"         );
@@ -6151,6 +6221,9 @@ void shaman_t::init_spells()
 
 void shaman_t::init_base_stats()
 {
+  if ( base.distance < 1 )
+    base.distance = ( specialization() == SHAMAN_ENHANCEMENT ) ? 5 : 30;
+
   player_t::init_base_stats();
 
   base.attack_power_per_strength = 0.0;
@@ -6167,7 +6240,6 @@ void shaman_t::init_base_stats()
   if ( spec.enhancement_shaman -> ok() )
     resources.base[ RESOURCE_MAELSTROM ] += spec.enhancement_shaman -> effectN( 5 ).base_value();
 
-  base.distance = ( specialization() == SHAMAN_ENHANCEMENT ) ? 5 : 30;
   base.mana_regen_from_spirit_multiplier = spec.meditation -> effectN( 1 ).percent();
 
   //if ( specialization() == SHAMAN_ENHANCEMENT )
@@ -6699,6 +6771,7 @@ void shaman_t::create_buffs()
     .trigger_spell( sets.set( SHAMAN_ENHANCEMENT, T18, B4 ) )
     .default_value( sets.set( SHAMAN_ENHANCEMENT, T18, B4 ) -> effectN( 1 ).trigger() -> effectN( 1 ).percent() )
     .add_invalidate( CACHE_PLAYER_DAMAGE_MULTIPLIER );
+  buff.sephuzs_secret = new sephuzs_secret_buff_t(this);
 }
 
 // shaman_t::init_gains =====================================================
@@ -6862,6 +6935,7 @@ void shaman_t::init_action_list_elemental()
   def -> add_action( this, "Fire Elemental" );
   def -> add_talent( this, "Storm Elemental" );
   def -> add_talent( this, "Elemental Mastery" );
+  def -> add_action( "use_item,name=gnawed_thumb_ring,if=equipped.gnawed_thumb_ring&(talent.ascendance.enabled&!buff.ascendance.up|!talent.ascendance.enabled)" );
   def -> add_action( "blood_fury,if=!talent.ascendance.enabled|buff.ascendance.up|cooldown.ascendance.remains>50" );
   def -> add_action( "berserking,if=!talent.ascendance.enabled|buff.ascendance.up" );
   def -> add_action( "run_action_list,name=aoe,if=active_enemies>2&(spell_targets.chain_lightning>2|spell_targets.lava_beam>2)" );
@@ -6876,7 +6950,7 @@ void shaman_t::init_action_list_elemental()
   aoe -> add_action( this, "Flame Shock", "if=spell_targets.chain_lightning<4&maelstrom>=20&!talent.lightning_rod.enabled,target_if=refreshable" );
   aoe -> add_action( this, "Earthquake" );
   aoe -> add_action( this, "Lava Burst", "if=dot.flame_shock.remains>cast_time&buff.lava_surge.up&!talent.lightning_rod.enabled&spell_targets.chain_lightning<4" );
-  aoe -> add_talent( this, "Elemental Blast", "if=!talent.lightning_rod.enabled&spell_targets.chain_lightning<5" );
+  aoe -> add_talent( this, "Elemental Blast", "if=!talent.lightning_rod.enabled&spell_targets.chain_lightning<5|talent.lightning_rod.enabled&spell_targets.chain_lightning<4" );
   aoe -> add_action( this, "Lava Beam" );
   aoe -> add_action( this, "Chain Lightning", "target_if=debuff.lightning_rod.down" );
   aoe -> add_action( this, "Chain Lightning" );
@@ -7236,6 +7310,11 @@ double shaman_t::composite_spell_haste() const
     h *= buff.elemental_mastery -> check_value();
   }
 
+  if ( buff.sephuzs_secret -> check() )
+  {
+    h *= 1.0 / (1.0 + buff.sephuzs_secret->default_value);
+  }
+
   return h;
 }
 
@@ -7298,6 +7377,11 @@ double shaman_t::composite_melee_haste() const
   if ( buff.elemental_mastery -> up() )
   {
     h *= buff.elemental_mastery -> check_value();
+  }
+
+  if ( buff.sephuzs_secret -> check() )
+  {
+    h *= 1.0 / (1.0 + buff.sephuzs_secret->default_value);
   }
 
   return h;
@@ -7380,6 +7464,7 @@ double shaman_t::composite_player_multiplier( school_e school ) const
   double m = player_t::composite_player_multiplier( school );
 
   m *= 1.0 + artifact.stormkeepers_power.percent();
+  m *= 1.0 + artifact.power_of_the_earthen_ring.percent();
   m *= 1.0 + artifact.earthshattering_blows.percent();
 
   if ( mastery.enhanced_elements -> ok() &&
@@ -7441,6 +7526,7 @@ double shaman_t::composite_player_pet_damage_multiplier( const action_state_t* s
   double m = player_t::composite_player_pet_damage_multiplier( s );
 
   m *= 1.0 + artifact.stormkeepers_power.percent();
+  m *= 1.0 + artifact.power_of_the_earthen_ring.percent();
   m *= 1.0 + artifact.earthshattering_blows.percent();
 
   auto school = s -> action -> get_school();
@@ -8137,6 +8223,17 @@ struct uncertain_reminder_t : public scoped_actor_callback_t<shaman_t>
   }
 };
 
+struct sephuzs_secret_t : public scoped_actor_callback_t<shaman_t>
+{
+  sephuzs_secret_t() : scoped_actor_callback_t(SHAMAN)
+  { }
+
+  void manipulate(shaman_t* actor, const special_effect_t& /* e */) override
+  {
+    actor->legendary.sephuzs_secret = true;
+  }
+};
+
 struct shaman_module_t : public module_t
 {
   shaman_module_t() : module_t( SHAMAN ) {}
@@ -8183,6 +8280,7 @@ struct shaman_module_t : public module_t
     register_special_effect( 207994, eotn_buff_shock_t(), true );
     register_special_effect( 207994, eotn_buff_chill_t(), true );
     register_special_effect( 234814, uncertain_reminder_t() );
+    register_special_effect( 208051, sephuzs_secret_t() );
   }
 
   void register_hotfixes() const override

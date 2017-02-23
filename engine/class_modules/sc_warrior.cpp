@@ -2898,13 +2898,35 @@ struct neltharions_fury_t: public warrior_attack_t
 struct rampage_attack_t: public warrior_attack_t
 {
   int aoe_targets;
+  bool first_attack;
+  bool first_attack_missed;
   rampage_attack_t( warrior_t* p, const spell_data_t* rampage, const std::string& name ):
     warrior_attack_t( name, p, rampage ),
-    aoe_targets( p -> spec.whirlwind -> effectN( 1 ).trigger() -> effectN( 1 ).base_value() )
+    aoe_targets( p -> spec.whirlwind -> effectN( 1 ).trigger() -> effectN( 1 ).base_value() ),
+    first_attack( false ),
+    first_attack_missed( false )
   {
     dual = true;
     weapon_multiplier *= 1.0 + p -> artifact.unstoppable.percent();
     base_aoe_multiplier = p -> spec.whirlwind -> effectN( 1 ).trigger() -> effectN( 3 ).percent();
+    if ( p -> spec.rampage -> effectN( 3 ).trigger() == rampage )
+      first_attack = true;
+  }
+
+  void execute() override
+  {
+    warrior_attack_t::execute();
+    if ( first_attack && result_is_miss( execute_state -> result ) )
+      first_attack_missed = true;
+    else if ( first_attack )
+      first_attack_missed = false;
+  }
+
+  void impact( action_state_t* s ) override
+  {
+    if ( !first_attack_missed ) // If the first attack misses, all of the rest do as well. However, if any other attack misses, the attacks after continue. 
+                                // The animations and timing of everything else -- such as odyns champion proccing after the last attack -- still occur, so we can't just cancel rampage.
+      warrior_attack_t::impact( s );
   }
 
   int n_targets() const override
@@ -4276,7 +4298,7 @@ struct taunt_t: public warrior_spell_t
     warrior_spell_t::impact( s );
   }
 
-  bool ready()
+  bool ready() override
   {
     if ( p() -> buff.berserker_rage -> check() && p() -> talents.warlords_challenge -> ok() )
       return true;
@@ -4644,8 +4666,10 @@ void warrior_t::init_spells()
 
 void warrior_t::init_base_stats()
 {
+  if ( base.distance < 1 )
+    base.distance = 5.0;
+
   player_t::init_base_stats();
-  base.distance = 5.0;
 
   resources.base[RESOURCE_RAGE] = 100 + ( ( artifact.unending_rage.value() + artifact.intolerance.value() ) / 10 );
   resources.max[RESOURCE_RAGE] = resources.base[RESOURCE_RAGE];
