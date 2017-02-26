@@ -1883,14 +1883,14 @@ struct spitting_cobra_t: public hunter_pet_t
     hunter_pet_t( *(o -> sim), *o, "spitting_cobra", PET_HUNTER,
                   false /* a "hack" to make ability_lag work */ )
   {
-    /* nuoHep 16/01/2017 0vers no buffs
+    /* nuoHep 16/01/2017 0vers no buffs, orc
      *    AP      DMG
      *   9491    13420
      *   22381   31646
      * As Cobra Spit has 1x AP mult it works out to
-     * the pet having ~1.414 ap coeff
+     * the pet having exactly 1.4 ap coeff
      */
-    owner_coeff.ap_from_ap = 1.414;
+    owner_coeff.ap_from_ap = 1.4;
 
     regen_type = REGEN_DISABLED;
   }
@@ -6278,16 +6278,18 @@ void hunter_t::apl_bm()
   default_list -> add_talent( this, "A Murder of Crows" );
   default_list -> add_talent( this, "Stampede", "if=buff.bloodlust.up|buff.bestial_wrath.up|cooldown.bestial_wrath.remains<=2|target.time_to_die<=14" );
   default_list -> add_action( this, "Dire Beast", "if=cooldown.bestial_wrath.remains>3" );
-  default_list -> add_talent( this, "Dire Frenzy", "if=cooldown.bestial_wrath.remains>6|target.time_to_die<9" );
+  default_list -> add_talent( this, "Dire Frenzy", "if=(cooldown.bestial_wrath.remains>6&(!equipped.the_mantle_of_command|pet.cat.buff.dire_frenzy.remains<=gcd.max*1.2))|"
+                                                   "(charges>=2&focus.deficit>=25+talent.dire_stable.enabled*12)|"
+                                                   "target.time_to_die<9" );
   default_list -> add_action( this, "Aspect of the Wild", "if=buff.bestial_wrath.up|target.time_to_die<12" );
   default_list -> add_talent( this, "Barrage", "if=spell_targets.barrage>1" );
-  default_list -> add_action( this, "Titan's Thunder", "if=talent.dire_frenzy.enabled|cooldown.dire_beast.remains>=3|buff.bestial_wrath.up&pet.dire_beast.active" );
+  default_list -> add_action( this, "Titan's Thunder", "if=talent.dire_frenzy.enabled|cooldown.dire_beast.remains>=3|(buff.bestial_wrath.up&pet.dire_beast.active)" );
   default_list -> add_action( this, "Bestial Wrath" );
-  default_list -> add_action( this, "Multi-Shot", "if=spell_targets>4&(pet.buff.beast_cleave.remains<gcd.max|pet.buff.beast_cleave.down)" );
+  default_list -> add_action( this, "Multi-Shot", "if=spell_targets>4&(pet.cat.buff.beast_cleave.remains<gcd.max|pet.cat.buff.beast_cleave.down)" );
   default_list -> add_action( this, "Kill Command" );
-  default_list -> add_action( this, "Multi-Shot", "if=spell_targets>1&(pet.buff.beast_cleave.remains<gcd.max*2|pet.buff.beast_cleave.down)" );
+  default_list -> add_action( this, "Multi-Shot", "if=spell_targets>1&(pet.cat.buff.beast_cleave.remains<gcd.max*2|pet.cat.buff.beast_cleave.down)" );
   default_list -> add_talent( this, "Chimaera Shot", "if=focus<90" );
-  default_list -> add_action( this, "Cobra Shot", "if=cooldown.kill_command.remains>focus.time_to_max&cooldown.bestial_wrath.remains>focus.time_to_max|"
+  default_list -> add_action( this, "Cobra Shot", "if=(cooldown.kill_command.remains>focus.time_to_max&cooldown.bestial_wrath.remains>focus.time_to_max)|"
                                                   "(buff.bestial_wrath.up&focus.regen*cooldown.kill_command.remains>30)|"
                                                   "target.time_to_die<cooldown.kill_command.remains" );
 }

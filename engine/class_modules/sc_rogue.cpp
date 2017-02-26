@@ -465,23 +465,6 @@ struct rogue_t : public player_t
   // Artifact powers
   struct artifact_t
   {
-    // Subtlety
-    artifact_power_t goremaws_bite;
-    artifact_power_t shadow_fangs;
-    artifact_power_t the_quiet_knife;
-    artifact_power_t demons_kiss;
-    artifact_power_t gutripper;
-    artifact_power_t precision_strike;
-    artifact_power_t fortunes_bite;
-    artifact_power_t soul_shadows;
-    artifact_power_t energetic_stabbing;
-    artifact_power_t catwalk;
-    artifact_power_t second_shuriken;
-    artifact_power_t akaaris_soul;
-    artifact_power_t shadow_nova;
-    artifact_power_t finality;
-    artifact_power_t legionblade;
-
     // Assassination
     artifact_power_t kingsbane;
     artifact_power_t assassins_blades;
@@ -500,7 +483,7 @@ struct rogue_t : public player_t
     artifact_power_t from_the_shadows;
     artifact_power_t slayers_precision;
 
-    // Swashbuckler
+    // Outlaw
     artifact_power_t curse_of_the_dreadblades;
     artifact_power_t cursed_edges;
     artifact_power_t black_powder;
@@ -516,6 +499,24 @@ struct rogue_t : public player_t
     artifact_power_t fates_thirst;
     artifact_power_t fortunes_strike;
     artifact_power_t cursed_steel;
+
+    // Subtlety
+    artifact_power_t goremaws_bite;
+    artifact_power_t shadow_fangs;
+    artifact_power_t the_quiet_knife;
+    artifact_power_t demons_kiss;
+    artifact_power_t gutripper;
+    artifact_power_t precision_strike;
+    artifact_power_t fortunes_bite;
+    artifact_power_t soul_shadows;
+    artifact_power_t energetic_stabbing;
+    artifact_power_t catwalk;
+    artifact_power_t flickering_shadows;
+    artifact_power_t second_shuriken;
+    artifact_power_t akaaris_soul;
+    artifact_power_t shadow_nova;
+    artifact_power_t finality;
+    artifact_power_t legionblade;
   } artifact;
 
   // Procs
@@ -721,7 +722,13 @@ namespace actions { // namespace actions
 
 static void break_stealth( rogue_t* p )
 {
-  if ( p -> buffs.stealth -> check() )
+  // As of 02/26/2017, if you have the Shadow Dance buff while stealthed, stealth doesn't break
+  // until the end of shadow dance. It is commonly "Extended Stealth".
+  // The only way to trigger it since recent hotfix is :
+  // - Do Shadow Dance -> Stealth (So only when Out of Combat)
+  // - Not triggering Subterfuge during a Vanish (to proc Stealth at the end of the Vanish)
+  //   and using Shadow Dance before Vanish expires.
+  if ( p -> buffs.stealth -> check() && ! p -> buffs.shadow_dance -> check() )
     p -> buffs.stealth -> expire();
 
   if ( p -> buffs.vanish -> check() )
@@ -1640,18 +1647,18 @@ struct insignia_of_ravenholdt_attack_t : public rogue_attack_t
 using namespace residual_action;
 struct mutilated_flesh_t : public residual_periodic_action_t<melee_attack_t>
 {
-  rogue_t* rouge;
-  mutilated_flesh_t( rogue_t* p ) :
-    residual_periodic_action_t<melee_attack_t>( "mutilated_flesh", p, p -> find_spell( 211672 ) ), rouge( p )
+  rogue_t* rogue;
+  mutilated_flesh_t( rogue_t* rogue_ ) :
+    residual_periodic_action_t<melee_attack_t>( "mutilated_flesh", rogue_, rogue_ -> find_spell( 211672 ) ), rogue( rogue_ )
   {
     background = true;
   }
 
   double calculate_tick_amount( action_state_t* state, double dmg_multiplier ) const override
   {
-    rogue_td_t* tdata = rouge -> get_target_data( state -> target );
+    rogue_td_t* tdata = rogue -> get_target_data( state -> target );
 
-    dmg_multiplier *= 1.0 + rouge -> agonizing_poison_stack_multiplier( tdata );;
+    dmg_multiplier *= 1.0 + rogue -> agonizing_poison_stack_multiplier( tdata );;
 
     return residual_periodic_action_t::calculate_tick_amount( state, dmg_multiplier );
   }
@@ -2320,10 +2327,6 @@ void rogue_attack_t::execute()
 
 inline bool rogue_attack_t::ready()
 {
-  if ( p() -> buffs.faster_than_light_trigger -> check() )
-  {
-    return false;
-  }
 
   if ( ! melee_attack_t::ready() )
     return false;
@@ -4397,10 +4400,10 @@ struct slice_and_dice_t : public rogue_attack_t
 
 // Sprint ===================================================================
 
-struct sprint_base_t : public rogue_attack_t
+struct sprint_t : public rogue_attack_t
 {
-  sprint_base_t( rogue_t* p, const std::string& name, const std::string& options_str ):
-    rogue_attack_t( name, p, p -> spell.sprint, options_str )
+  sprint_t( rogue_t* p, const std::string& options_str ):
+    rogue_attack_t( "sprint", p, p -> spell.sprint, options_str )
   {
     harmful = callbacks = false;
     cooldown = p -> cooldowns.sprint;
@@ -4414,34 +4417,11 @@ struct sprint_base_t : public rogue_attack_t
     rogue_attack_t::execute();
 
     p() -> buffs.sprint -> trigger();
-  }
-};
 
-struct sprint_t : public sprint_base_t
-{
-  sprint_t( rogue_t* p, const std::string& options_str ) :
-    sprint_base_t( p, "sprint", options_str )
-  { }
-};
-
-struct sprint_offensive_t : public sprint_base_t
-{
-  sprint_offensive_t( rogue_t* p, const std::string& options_str ) :
-    sprint_base_t( p, "sprint_offensive", options_str )
-  { }
-
-  void execute() override
-  {
-    sprint_base_t::execute();
-
-    // We must stop autoattacks
-    if ( p() -> main_hand_attack && p() -> main_hand_attack -> execute_event )
-      event_t::cancel( p() -> main_hand_attack -> execute_event );
-
-    if ( p() -> off_hand_attack && p() -> off_hand_attack -> execute_event )
-      event_t::cancel( p() -> off_hand_attack -> execute_event );
-
-    p() -> buffs.faster_than_light_trigger -> trigger();
+    if ( p() -> artifact.flickering_shadows.rank() )
+    {
+      p() -> buffs.faster_than_light_trigger -> trigger();
+    }
   }
 };
 
@@ -4817,6 +4797,39 @@ struct poisoned_knife_t : public rogue_attack_t
 
   double composite_poison_flat_modifier( const action_state_t* ) const override
   { return 1.0; }
+};
+
+// ==========================================================================
+// Cancel AutoAttack
+// ==========================================================================
+
+struct cancel_autoattack_t : public action_t
+{
+  rogue_t* rogue;
+  cancel_autoattack_t( rogue_t* rogue_, const std::string& options_str ) :
+    action_t( ACTION_OTHER, "cancel_autoattack", rogue_ ),
+    rogue( rogue_ )
+  {
+    trigger_gcd = timespan_t::zero();
+  }
+
+  void execute() override
+  {
+    action_t::execute();
+
+    // Cancel the scheduled AA
+    if ( rogue -> main_hand_attack && rogue -> main_hand_attack -> execute_event )
+      event_t::cancel( rogue -> main_hand_attack -> execute_event );
+
+    if ( rogue -> off_hand_attack && rogue -> off_hand_attack -> execute_event )
+      event_t::cancel( rogue -> off_hand_attack -> execute_event );
+  }
+
+  virtual bool ready() override
+  {
+    return rogue -> main_hand_attack && rogue -> main_hand_attack -> execute_event ||
+           rogue -> off_hand_attack && rogue -> off_hand_attack -> execute_event;
+  }
 };
 
 // ==========================================================================
@@ -6047,6 +6060,24 @@ struct vanish_t : public stealth_like_buff_t
   vanish_t( rogue_t* r ) :
     stealth_like_buff_t( r, "vanish", r -> find_spell( 11327 ) )
   { }
+
+  void expire_override( int expiration_stacks, timespan_t remaining_duration ) override
+  {
+    // As of 02/26/2017, if you have Subterfuge talent and manages to no proc it during Vanish
+    // (For example, if you do not attack or use a trinket like Draught of Souls)
+    // It will wrongly proc Master of Shadows, but considering we have 3s of AFK + the proc from Vanish, we will
+    // likely be full energy already.
+    // Currently, it's used only when Sprint + DoS + ShD, so 6s of AFK and 2 procs of MoSh, so :
+    // 6*10 + 2*25 = 110 energy minimum, i.e. more than our normal cap.
+    // Altough, it's pertubating Energy Stats in report ^^
+    // FIXME: Trigger stealth without triggering Master of Shadows.
+    if ( rogue -> talent.subterfuge -> ok() && ! rogue -> buffs.subterfuge -> check() )
+    {
+      rogue -> buffs.stealth -> trigger();
+    }
+
+    stealth_like_buff_t::expire_override( expiration_stacks, remaining_duration );
+  }
 };
 
 // Shadow dance acts like "stealth like abilities" except for Mantle of the Master
@@ -6664,8 +6695,9 @@ void rogue_t::init_action_list()
     std::string food_action = "food,name=";
     if ( specialization() == ROGUE_ASSASSINATION )
     {
-      food_action += ( ( level() >= 110 ) ? "seedbattered_fish_plate,if=talent.exanguinate.enabled" : ( level() >= 100 ) ? "jumbo_sea_dog" : ( level() >= 90 ) ? "sea_mist_rice_noodles" : ( level() >= 85 ) ? "seafood_magnifique_feast" : "" );
-      food_action += ( ( level() >= 110 ) ? "nightborne_delicacy_platter,if=!talent.exanguinate.enabled" : "" );
+      food_action += ( ( level() >= 110 ) ? "nightborne_delicacy_platter,if=!talent.exsanguinate.enabled" : ( level() >= 100 ) ? "jumbo_sea_dog" : ( level() >= 90 ) ? "sea_mist_rice_noodles" : ( level() >= 85 ) ? "seafood_magnifique_feast" : "" );
+      if ( level() >= 110 )
+        precombat -> add_action( "food,name=seedbattered_fish_plate,if=talent.exsanguinate.enabled" );
     }
     else if ( specialization() == ROGUE_OUTLAW )
       food_action += ( ( level() >= 110 ) ? "seedbattered_fish_plate" : ( level() >= 100 ) ? "jumbo_sea_dog" : ( level() >= 90 ) ? "sea_mist_rice_noodles" : ( level() >= 85 ) ? "seafood_magnifique_feast" : "" );
@@ -6732,7 +6764,7 @@ void rogue_t::init_action_list()
     cds -> add_action( potion_action );
     for ( size_t i = 0; i < item_actions.size(); i++ )
       if ( find_item( "draught_of_souls" ) )
-        cds -> add_action( item_actions[i] + ",if=energy.time_to_max>3.5&!debuff.kingsbane.up&(!talent.agonizing_poison.enabled|(debuff.agonizing_poison.stack=5&debuff.surge_of_toxins.remains>3))" );
+        cds -> add_action( item_actions[i] + ",if=energy.time_to_max>3.5&(!talent.agonizing_poison.enabled|(debuff.agonizing_poison.stack=5&debuff.surge_of_toxins.remains>3))" );
       else
         cds -> add_action( item_actions[i] + ",if=buff.bloodlust.react|target.time_to_die<=20|debuff.vendetta.up" );
     for ( size_t i = 0; i < racial_actions.size(); i++ )
@@ -6845,13 +6877,16 @@ void rogue_t::init_action_list()
     precombat -> add_action( "variable,name=stealth_threshold,value=(15+talent.vigor.enabled*35+talent.master_of_shadows.enabled*25+variable.ssw_refund)" );
     precombat -> add_action( "variable,name=shd_fractionnal,value=2.45" );
     precombat -> add_talent( this, "Enveloping Shadows", "if=combo_points>=5" );
+    precombat -> add_action( this, "Shadow Dance", "if=equipped.mantle_of_the_master_assassin" ); // Before SoD because we do it while not in stealth in-game
     precombat -> add_action( this, "Symbols of Death" );
 
     // Main Rotation
+    def -> add_action( "run_action_list,name=sprinted,if=buff.faster_than_light_trigger.up|(equipped.mantle_of_the_master_assassin&equipped.draught_of_souls&buff.sprint.up&buff.vanish.up)" );
     def -> add_action( "call_action_list,name=cds" );
     def -> add_action( "run_action_list,name=stealthed,if=stealthed.all", "Fully switch to the Stealthed Rotation (by doing so, it forces pooling if nothing is available)" );
     def -> add_action( "call_action_list,name=finish,if=combo_points>=5|(combo_points>=4&spell_targets.shuriken_storm>=3&spell_targets.shuriken_storm<=4)" );
-    def -> add_action( "sprint_offensive,if=energy.time_to_max>=1.5&cooldown.shadow_dance.charges_fractional<variable.shd_fractionnal-1&!cooldown.vanish.up&target.time_to_die>=8" );
+    def -> add_action( this, "Sprint", "if=!equipped.draught_of_souls&energy.time_to_max>=1.5&cooldown.shadow_dance.charges_fractional<variable.shd_fractionnal-1&!cooldown.vanish.up&target.time_to_die>=8" );
+    def -> add_action( this, "Sprint", "if=equipped.draught_of_souls&!stealthed.all&time>10&mantle_duration=0" );
     def -> add_action( "call_action_list,name=stealth_als,if=combo_points.deficit>=2+talent.premeditation.enabled" );
     def -> add_action( "call_action_list,name=build,if=energy.deficit<=variable.stealth_threshold" );
 
@@ -6865,9 +6900,7 @@ void rogue_t::init_action_list()
     action_priority_list_t* cds = get_action_priority_list( "cds", "Cooldowns" );
     cds -> add_action( "potion,name=old_war,if=buff.bloodlust.react|target.time_to_die<=25|buff.shadow_blades.up" );
     for ( size_t i = 0; i < item_actions.size(); i++ )
-      if ( find_item( "draught_of_souls" ) )
-        cds -> add_action( item_actions[i] + ",if=cooldown.shadow_dance.charges_fractional<2.45&buff.shadow_dance.down" );
-      else
+      if ( ! find_item( "draught_of_souls" ) )
         cds -> add_action( item_actions[i] + ",if=(buff.shadow_blades.up&stealthed.rogue)|target.time_to_die<20" );
     for ( size_t i = 0; i < racial_actions.size(); i++ )
     {
@@ -6890,6 +6923,13 @@ void rogue_t::init_action_list()
     finish -> add_talent( this, "Death from Above" );
     finish -> add_action( this, "Eviscerate" );
 
+    action_priority_list_t* sprinted = get_action_priority_list( "sprinted", "Sprinted" );
+    sprinted -> add_action( "cancel_autoattack" );
+    for ( size_t i = 0; i < item_actions.size(); i++ )
+      if ( find_item( "draught_of_souls" ) )
+        sprinted -> add_action( item_actions[i] + ",if=!equipped.mantle_of_the_master_assassin|buff.faster_than_light_trigger.remains<=0.5" );
+    sprinted -> add_action( this, "Shadow Dance", "if=equipped.mantle_of_the_master_assassin&equipped.draught_of_souls&buff.vanish.up&buff.vanish.remains<=0.5" );
+
     // Stealth Action List Starter
     action_priority_list_t* stealth_als = get_action_priority_list( "stealth_als", "Stealth Action List Starter" );
     stealth_als -> add_action( "call_action_list,name=stealth_cds,if=energy.deficit<=variable.stealth_threshold&(!equipped.shadow_satyrs_walk|cooldown.shadow_dance.charges_fractional>=variable.shd_fractionnal|energy.deficit>=10)" );
@@ -6909,7 +6949,7 @@ void rogue_t::init_action_list()
     // Stealthed Rotation
     action_priority_list_t* stealthed = get_action_priority_list( "stealthed", "Stealthed Rotation" );
     stealthed -> add_action( this, "Symbols of Death", "if=buff.symbols_of_death.remains<target.time_to_die-4&buff.symbols_of_death.remains<=buff.symbols_of_death.duration*0.3" );
-    stealthed -> add_action( "call_action_list,name=finish,if=combo_points>=5&(spell_targets.shuriken_storm>=2+talent.premeditation.enabled+equipped.shadow_satyrs_walk|(mantle_duration>0&mantle_duration<=1.2))" );
+    stealthed -> add_action( "call_action_list,name=finish,if=combo_points>=5&(spell_targets.shuriken_storm>=2+talent.premeditation.enabled+equipped.shadow_satyrs_walk|(mantle_duration<=1.3&mantle_duration-gcd.remains>=0.3))" );
     stealthed -> add_action( this, "Shuriken Storm", "if=buff.shadowmeld.down&((combo_points.deficit>=3&spell_targets.shuriken_storm>=2+talent.premeditation.enabled+equipped.shadow_satyrs_walk)|(combo_points.deficit>=1+buff.shadow_blades.up&buff.the_dreadlords_deceit.stack>=29))" );
     stealthed -> add_action( this, "Shadowstrike", "if=combo_points.deficit>=2+talent.premeditation.enabled+buff.shadow_blades.up-equipped.mantle_of_the_master_assassin" );
     stealthed -> add_action( "call_action_list,name=finish,if=combo_points>=5" );
@@ -6971,12 +7011,11 @@ action_t* rogue_t::create_action( const std::string& name,
   if ( name == "shuriken_toss"       ) return new shuriken_toss_t      ( this, options_str );
   if ( name == "slice_and_dice"      ) return new slice_and_dice_t     ( this, options_str );
   if ( name == "sprint"              ) return new sprint_t             ( this, options_str );
-  if ( name == "sprint_offensive"    ) return new sprint_offensive_t   ( this, options_str );
   if ( name == "stealth"             ) return new stealth_t            ( this, options_str );
   if ( name == "symbols_of_death"    ) return new symbols_of_death_t   ( this, options_str );
   if ( name == "vanish"              ) return new vanish_t             ( this, options_str );
   if ( name == "vendetta"            ) return new vendetta_t           ( this, options_str );
-
+  if ( name == "cancel_autoattack"   ) return new cancel_autoattack_t  ( this, options_str );
   if ( name == "swap_weapon"         ) return new weapon_swap_t        ( this, options_str );
 
   return player_t::create_action( name, options_str );
@@ -7334,6 +7373,7 @@ void rogue_t::init_spells()
   artifact.soul_shadows     = find_artifact_spell( "Soul Shadows" );
   artifact.energetic_stabbing = find_artifact_spell( "Energetic Stabbing" );
   artifact.catwalk          = find_artifact_spell( "Catwalk" );
+  artifact.flickering_shadows = find_artifact_spell( "Flickering Shadows" );
   artifact.second_shuriken  = find_artifact_spell( "Second Shuriken" );
   artifact.akaaris_soul     = find_artifact_spell( "Akaari's Soul" );
   artifact.shadow_nova      = find_artifact_spell( "Shadow Nova" );
