@@ -345,12 +345,12 @@ class DataGenerator(object):
 
         #print self._class_map, self._race_map
         if self._options.output:
-            self._out = pathlib.Path(self._options.output).open('w')
+            self._out = pathlib.Path(self._options.output).open('w', encoding="utf-8")
             if not self._out.writable():
                 print('Unable to write to file "%s"' % self._options.output)
                 return False
         elif self._options.append:
-            self._out = pathlib.Path(self._options.append).open('a')
+            self._out = pathlib.Path(self._options.append).open('a', encoding="utf-8")
             if not self._out.writable():
                 print('Unable to write to file "%s"' % self._options.append)
                 return False
@@ -1325,6 +1325,8 @@ class SpellDataGenerator(DataGenerator):
           ( 217207, 0 ), # Dire Frenzy (pet)
           ( 201594, 0 ), # Stampede
           ( 118459, 5 ), # Beast Cleave
+          ( 243120, 5 ), ( 243121, 5 ), # Deathstrike Venom (Cobra Commander snakes)
+          ( 242735, 5 ), # Talon Slash (Talon Bond attack)
         ),
 
         # Rogue:
@@ -1455,6 +1457,8 @@ class SpellDataGenerator(DataGenerator):
           ( 225119, 5 ),                            # Arcane Familiar attack, Arcane Assault
           ( 210833, 0 ),                            # Touch of the Magi
           ( 228358, 0 ),                            # Winter's Chill
+          ( 242253, 0 ),                            # Frost T20 2P Frozen Mass
+          ( 240689, 0 ),                            # Aluneth - Time and Space
         ),
 
         # Warlock:
@@ -1515,7 +1519,6 @@ class SpellDataGenerator(DataGenerator):
           ( 125174, 3 ), # Touch of Karma redirect buff
           ( 195651, 3 ), # Crosswinds Artifact trait trigger spell
           ( 196061, 3 ), # Crosswinds Artifact trait damage spell
-          ( 116007, 3 ), # Cestus of Storms Artifact trait damage spell
           ( 240672, 3 ), # Master of Combinations Artifact trait buff
           ( 211432, 3 ), # Tier 19 4-piece DPS Buff
           # Legendary
