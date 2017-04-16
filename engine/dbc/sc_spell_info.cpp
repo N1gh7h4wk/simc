@@ -913,6 +913,7 @@ std::string spell_info::to_str( const dbc_t& dbc, const spell_data_t* spell, int
     const spellpower_data_t* pd = spell -> _power -> at( i );
 
     s << "Resource         : ";
+
     if ( pd -> type() == POWER_MANA )
       s << pd -> cost() * 100.0 << "%";
     else
@@ -936,11 +937,6 @@ std::string spell_info::to_str( const dbc_t& dbc, const spell_data_t* spell, int
     else
       s << "Unknown (" << pd -> type() << ")";
 
-    if ( pd -> type() == POWER_MANA && pd -> cost() != 0 )
-    {
-      s << " (" << floor( dbc.resource_base( pt, level ) * pd -> cost() ) << " @Level " << level << ")";
-    }
-
     if ( pd -> cost_per_tick() != 0 )
     {
       s << " and ";
@@ -958,13 +954,10 @@ std::string spell_info::to_str( const dbc_t& dbc, const spell_data_t* spell, int
       else
         s << "Unknown (" << pd -> type() << ")";
 
-      if ( pd -> type() == POWER_MANA )
-      {
-        s << " (" << floor( dbc.resource_base( pt, level ) * pd -> cost_per_tick() ) << " @Level " << level << ")";
-      }
-
       s << " per second or tick";
     }
+
+    s << " (id=" << pd -> id() << ")";
 
     if ( pd -> aura_id() > 0 && dbc.spell( pd -> aura_id() ) -> id() == pd -> aura_id() )
       s << " w/ " << dbc.spell( pd -> aura_id() ) -> name_cstr() << " (id=" << pd -> aura_id() << ")";
@@ -1173,7 +1166,7 @@ std::string spell_info::to_str( const dbc_t& dbc, const spell_data_t* spell, int
       std::ostringstream value_str;
       std::ostringstream spells_str;
       value_str << ", Values: [ ";
-      bool has_multiple_spells = false;
+      // bool has_multiple_spells = false;
       for ( size_t i = 0, end = powers.size(); i < end; ++i )
       {
         const auto& power = powers[ i ];
@@ -1187,7 +1180,7 @@ std::string spell_info::to_str( const dbc_t& dbc, const spell_data_t* spell, int
           auto rank_spell = dbc.spell( power -> id_spell() );
           value_str << rank_spell -> effectN( 1 ).base_value();
           spells_str << rank_spell -> id();
-          has_multiple_spells = true;
+          // has_multiple_spells = true;
         }
         else
         {

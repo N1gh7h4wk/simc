@@ -304,7 +304,6 @@ public:
     const spell_data_t* death_sweep;
     const spell_data_t* demonic_appetite_fury;
     const spell_data_t* eye_beam;
-    const spell_data_t* fel_barrage_proc;
     const spell_data_t* fel_rush_damage;
     const spell_data_t* vengeful_retreat;
 
@@ -333,7 +332,8 @@ public:
     artifact_power_t balanced_blades;
     artifact_power_t bladedancers_grace;
     artifact_power_t chaos_burn;
-    artifact_power_t chaos_vision;    
+    artifact_power_t chaos_vision;
+    artifact_power_t chaotic_onslaught;
     artifact_power_t contained_fury;
     artifact_power_t critical_chaos;
     artifact_power_t demon_rage;
@@ -350,7 +350,6 @@ public:
     artifact_power_t wide_eyes;
 
     // NYI
-    artifact_power_t chaotic_onslaught;
     artifact_power_t deceivers_fury;    
 
     // Vengeance -- The Aldrachi Warblades
@@ -392,7 +391,6 @@ public:
     cooldown_t* demonic_appetite;
     cooldown_t* eye_beam;
     cooldown_t* fel_barrage;
-    cooldown_t* fel_barrage_proc;
     cooldown_t* fel_rush;
     cooldown_t* fel_rush_secondary;
     cooldown_t* fury_of_the_illidari;
@@ -465,6 +463,7 @@ public:
     // Havoc
     real_ppm_t* felblade_havoc;
     real_ppm_t* inner_demons;
+    real_ppm_t* fel_barrage;
 
     // Vengeance
     real_ppm_t* felblade;
@@ -484,6 +483,8 @@ public:
     spell_t* inner_demons;
     attack_t* chaos_cleave;
     attack_t* chaos_cleave_annihilation;
+    attack_t* chaotic_onslaught;
+    attack_t* chaotic_onslaught_annihilation;
 
     // Vengeance
     heal_t* charred_warblades;
@@ -549,6 +550,7 @@ public:
   void invalidate_cache( cache_e ) override;
   resource_e primary_resource() const override;
   role_e primary_role() const override;
+  void activate() override;
 
   // custom demon_hunter_t init functions
 private:
@@ -1077,6 +1079,7 @@ public:
   bool may_proc_fel_barrage;
   bool havoc_damage_increase;
   bool vengeance_damage_increase;
+  unsigned energize_die_sides;
 
   demon_hunter_action_t(const std::string& n, demon_hunter_t* p,
     const spell_data_t* s = spell_data_t::nil(),
@@ -1087,7 +1090,8 @@ public:
     hasted_gcd(false),
     may_proc_fel_barrage(false),
     havoc_damage_increase(ab::data().affected_by(p->spec.havoc->effectN(6))),
-    vengeance_damage_increase(ab::data().affected_by(p->spec.vengeance->effectN(1)))
+    vengeance_damage_increase(ab::data().affected_by(p->spec.vengeance->effectN(1))),
+    energize_die_sides(0)
   {
     ab::parse_options( o );
     ab::may_crit      = true;
@@ -1165,16 +1169,18 @@ public:
     return am;
   }
 
-  virtual double composite_energize_amount(
-    const action_state_t* s ) const override
+  virtual double composite_energize_amount( const action_state_t* s ) const override
   {
     double ea = ab::composite_energize_amount( s );
 
+    if(energize_die_sides > 0)
+    {
+      ea += static_cast<int>(p()->rng().range(1, 1 + energize_die_sides));
+    }
+
     if ( havoc_t19_2pc && ab::energize_resource == RESOURCE_FURY )
     {
-      ea *=
-        1.0 +
-        p() -> sets.set( DEMON_HUNTER_HAVOC, T19, B2 ) -> effectN( 1 ).percent();
+      ea *= 1.0 + p()->sets.set(DEMON_HUNTER_HAVOC, T19, B2)->effectN(1).percent();
     }
 
     return ea;
@@ -1235,7 +1241,7 @@ public:
   {
     ab::execute();
 
-    if ( !ab::hit_any_target && ab::resource_consumed > 0 )
+    if ( !ab::hit_any_target && ab::last_resource_cost > 0 )
     {
       trigger_refund();
     }
@@ -1247,7 +1253,7 @@ public:
 
     if ( ab::current_resource() == RESOURCE_FURY )
     {
-      delusions_of_grandeur( ab::resource_consumed );
+      delusions_of_grandeur( ab::last_resource_cost );
     }
   }
 
@@ -1286,7 +1292,7 @@ public:
     if ( ab::resource_current == RESOURCE_FURY ||
          ab::resource_current == RESOURCE_PAIN )
     {
-      p() -> resource_gain( ab::resource_current, ab::resource_consumed * 0.80,
+      p() -> resource_gain( ab::resource_current, ab::last_resource_cost * 0.80,
                           p() -> gain.miss_refund );
     }
   }
@@ -1343,26 +1349,14 @@ public:
     if ( s -> result_amount <= 0 )
       return;
 
-    if ( p() -> cooldown.fel_barrage_proc -> down() )
-      return;
-
-    /* Sep 23 2016: Via hotfix, this ability was changed in some mysterious
-    unknown manner. Proc mechanic is now totally serverside.
-    http://blue.mmo-champion.com/topic/767333-hotfixes-september-16/
-
-    Assuming proc chance and ICD are unchanged and that ICD starts on-attempt
-    instead of on-success now.
-
-    As a result, chance and ICD are now hardcoded (they are no longer in the
-    spell data).*/
-
-    if ( p() -> rng().roll( 0.10 ) )
+    if (p()->rppm.fel_barrage->trigger())
     {
-      p() -> proc.fel_barrage -> occur();
-      p() -> cooldown.fel_barrage -> reset( true );
+      p()->proc.fel_barrage->occur();
+      if (maybe_ptr(p()->dbc.ptr))
+        p()->cooldown.fel_barrage->adjust(timespan_t::from_seconds(-5), true);
+      else
+        p()->cooldown.fel_barrage->reset(true);
     }
-
-    p() -> cooldown.fel_barrage_proc -> start();
   }
 
 protected:
@@ -2201,7 +2195,7 @@ struct fiery_brand_t : public demon_hunter_spell_t
 
       // Pick a random target.
       player_t* target =
-        candidates[ ( int ) p() -> rng().range( 0, (double)candidates.size() ) ];
+        candidates[static_cast<int>(p()->rng().range(0, (double)candidates.size()))];
 
       // Execute a dot on that target.
       this -> target = target;
@@ -3167,7 +3161,11 @@ struct blade_dance_attack_t : public demon_hunter_attack_t
   {
     double cd = demon_hunter_attack_t::composite_crit_damage_bonus_multiplier();
 
-    cd *= 1.0 + p()->artifact.bladedancers_grace.percent();
+    // Currently doesn't affect Death Sweep, so use the affected list to determine if we apply it
+    if (data().affected_by(p()->artifact.bladedancers_grace.data().effectN(1)))
+    {
+      cd *= 1.0 + p()->artifact.bladedancers_grace.percent();
+    }
 
     return cd;
   }
@@ -3413,8 +3411,8 @@ struct chaos_strike_base_t : public demon_hunter_attack_t
     bool may_refund;
 
     chaos_strike_damage_t( demon_hunter_t* p, const spelleffect_data_t& eff,
-                           chaos_strike_base_t* a )
-      : demon_hunter_attack_t( "chaos_strike_dmg", p, eff.trigger() ),
+                           chaos_strike_base_t* a, const std::string& name )
+      : demon_hunter_attack_t( name, p, eff.trigger() ),
       delay( timespan_t::from_millis( eff.misc_value1() ) ),
       parent( a )
     {
@@ -3460,7 +3458,7 @@ struct chaos_strike_base_t : public demon_hunter_attack_t
          we'll replicate that by doing it here instead of in execute(). */
       chaos_strike_state_t* cs = debug_cast<chaos_strike_state_t*>( s );
 
-      if ( weapon == &( p() -> off_hand_weapon ) && parent -> roll_refund( cs ) )
+      if (may_refund && parent->roll_refund(cs))
       {
         p() -> resource_gain( RESOURCE_FURY,
                               parent -> composite_energize_amount( s ),
@@ -3472,12 +3470,24 @@ struct chaos_strike_base_t : public demon_hunter_attack_t
     {
       demon_hunter_attack_t::impact(state);
 
+      // Chaos Cleave
       if (p()->talent.chaos_cleave->ok())
       {
-        attack_t* const chaos_cleave = p()->buff.metamorphosis->up() ? p()->active.chaos_cleave_annihilation : p()->active.chaos_cleave;
+        attack_t* const chaos_cleave = p()->buff.metamorphosis->check() 
+          ? p()->active.chaos_cleave_annihilation : p()->active.chaos_cleave;
         chaos_cleave->base_dd_min = state->result_total;
         chaos_cleave->base_dd_max = state->result_total;
         chaos_cleave->schedule_execute();
+      }
+
+      // Chaotic Onslaught
+      if (may_refund && p()->artifact.chaotic_onslaught.rank()
+        && p()->rng().roll(p()->artifact.chaotic_onslaught.percent()))
+      {
+        attack_t* const chaotic_onslaught = p()->buff.metamorphosis->check() ?
+          p()->active.chaotic_onslaught_annihilation : p()->active.chaotic_onslaught;
+        chaotic_onslaught->target = state->target;
+        chaotic_onslaught->schedule_execute();
       }
     }
   };
@@ -3520,18 +3530,15 @@ struct chaos_strike_base_t : public demon_hunter_attack_t
   std::vector<demon_hunter_attack_t*> attacks;
 
   chaos_strike_base_t( const std::string& n, demon_hunter_t* p,
-                       const spell_data_t* s, const std::string& options_str )
+                       const spell_data_t* s, const std::string& options_str = std::string())
     : demon_hunter_attack_t( n, p, s, options_str )
   {
-    energize_amount =
-      p -> spec.chaos_strike_refund -> effectN( 1 ).resource( RESOURCE_FURY );
-    aoe = s->effectN( 1 ).chain_target();
+    energize_amount = p->spec.chaos_strike_refund->effectN(1).resource(RESOURCE_FURY);
+    aoe = s->effectN(1).chain_target();
 
-
-      // Don't put damage modifiers here, they should go in chaos_strike_damage_t.
-      // Crit chance modifiers need to be in here, not chaos_strike_damage_t.
-    base_crit +=
-      p -> sets.set( DEMON_HUNTER_HAVOC, T19, B4 ) -> effectN( 1 ).percent();
+    // Don't put damage modifiers here, they should go in chaos_strike_damage_t.
+    // Crit chance modifiers need to be in here, not chaos_strike_damage_t.
+    base_crit += p->sets.set(DEMON_HUNTER_HAVOC, T19, B4)->effectN(1).percent();
   }
 
   virtual bool init_finished() override
@@ -3610,17 +3617,18 @@ struct chaos_strike_base_t : public demon_hunter_attack_t
     and for Chaos Strike it's just the OH (this action is the MH action). */
     for ( size_t i = 0; i < attacks.size(); i++ )
     {
-      make_event<chaos_strike_event_t>( *sim,
-        attacks[ i ], target,
-        debug_cast<chaos_strike_state_t*>( execute_state ) );
+      make_event<chaos_strike_event_t>(*sim,
+        attacks[i], target,
+        debug_cast<chaos_strike_state_t*>(execute_state));
     }
 
     // Metamorphosis benefit
     p() -> buff.metamorphosis -> up();
 
-    if ( hit_any_target )
+    // On-cast procs do not appear to trigger from the Chaotic Onslaught procs
+    if ( hit_any_target && !this->background)
     {
-      // TODO: Travel time
+      // Demonic Appetite
       if (p()->talent.demonic_appetite->ok() && !p()->cooldown.demonic_appetite->down())
       {
         if (p()->rng().roll(p()->talent.demonic_appetite->proc_chance()))
@@ -3644,19 +3652,18 @@ struct chaos_strike_base_t : public demon_hunter_attack_t
 
 struct chaos_strike_t : public chaos_strike_base_t
 {
-  chaos_strike_t( demon_hunter_t* p, const std::string& options_str )
-    : chaos_strike_base_t( "chaos_strike", p, p -> spec.chaos_strike,
-                           options_str )
+  chaos_strike_t( demon_hunter_t* p, const std::string& options_str)
+    : chaos_strike_base_t( "chaos_strike", p, p -> spec.chaos_strike, options_str )
   {
     if ( p -> chaos_strike_attacks.empty() )
     {
-      p -> chaos_strike_attacks.push_back(
-        new chaos_strike_damage_t( p, data().effectN( 2 ), this ) );
-      p -> chaos_strike_attacks.push_back(
-        new chaos_strike_damage_t( p, data().effectN( 3 ), this ) );
+      p->chaos_strike_attacks.push_back(
+        new chaos_strike_damage_t(p, data().effectN(2), this, "chaos_strike_dmg_1"));
+      p->chaos_strike_attacks.push_back(
+        new chaos_strike_damage_t(p, data().effectN(3), this, "chaos_strike_dmg_2"));
 
       // Jul 12 2016: Only first attack procs Fel Barrage.
-      p -> chaos_strike_attacks.front() -> may_proc_fel_barrage = true;
+      p->chaos_strike_attacks.front()->may_proc_fel_barrage = true;
     }
 
     attacks = p -> chaos_strike_attacks;
@@ -3664,6 +3671,11 @@ struct chaos_strike_t : public chaos_strike_base_t
     if (p->talent.chaos_cleave->ok())
     {
       add_child(p->active.chaos_cleave);
+    }
+
+    if (p->artifact.chaotic_onslaught.rank())
+    {
+      add_child(p->active.chaotic_onslaught);
     }
   }
 
@@ -3678,11 +3690,110 @@ struct chaos_strike_t : public chaos_strike_base_t
   }
 };
 
+// Annihilation =============================================================
+
+struct annihilation_t : public chaos_strike_base_t
+{
+  annihilation_t( demon_hunter_t* p, const std::string& options_str )
+    : chaos_strike_base_t( "annihilation", p, p -> spec.annihilation, options_str )
+  {
+    if (p->annihilation_attacks.empty())
+    {
+      p->annihilation_attacks.push_back(
+        new chaos_strike_damage_t(p, data().effectN(2), this, "annihilation_dmg_1"));
+      p->annihilation_attacks.push_back(
+        new chaos_strike_damage_t(p, data().effectN(3), this, "annihilation_dmg_2"));
+
+      // Jul 12 2016: Only first attack procs Fel Barrage.
+      p->annihilation_attacks.front()->may_proc_fel_barrage = true;
+    }
+
+    attacks = p -> annihilation_attacks;
+
+    if (p->talent.chaos_cleave->ok())
+    {
+      add_child(p->active.chaos_cleave_annihilation);
+    }
+
+    if (p->artifact.chaotic_onslaught.rank())
+    {
+      add_child(p->active.chaotic_onslaught_annihilation);
+    }
+  }
+
+  bool ready() override
+  {
+    if ( !p() -> buff.metamorphosis -> check() )
+    {
+      return false;
+    }
+
+    return chaos_strike_base_t::ready();
+  }
+};
+
+// Chaotic Onslaught ========================================================
+
+struct chaotic_onslaught_t : public chaos_strike_base_t
+{
+  chaotic_onslaught_t(demon_hunter_t* p)
+    : chaos_strike_base_t("chaos_strike_onslaught", p, p -> spec.chaos_strike)
+  {
+    background = true;
+    trigger_gcd = timespan_t::zero();
+
+    attacks.push_back(
+      new chaos_strike_damage_t(p, data().effectN(2), this, "chaos_strike_onslaught_dmg_1"));
+    attacks.push_back(
+      new chaos_strike_damage_t(p, data().effectN(3), this, "chaos_strike_onslaught_dmg_2"));
+
+    // Jul 12 2016: Only first attack procs Fel Barrage.
+    attacks.front()->may_proc_fel_barrage = true;
+  }
+
+  void consume_resource() override
+  {
+  }
+
+  bool ready() override
+  {
+    return true;
+  }
+};
+
+struct chaotic_onslaught_annihilation_t : public chaos_strike_base_t
+{
+  chaotic_onslaught_annihilation_t(demon_hunter_t* p)
+    : chaos_strike_base_t("annihilation_onslaught", p, p -> spec.annihilation)
+  {
+    background = true;
+    trigger_gcd = timespan_t::zero();
+
+    attacks.push_back(
+      new chaos_strike_damage_t(p, data().effectN(2), this, "annihilation_onslaught_dmg_1"));
+    attacks.push_back(
+      new chaos_strike_damage_t(p, data().effectN(3), this, "annihilation_onslaught_dmg_2"));
+
+    // Jul 12 2016: Only first attack procs Fel Barrage.
+    attacks.front()->may_proc_fel_barrage = true;
+  }
+
+  void consume_resource() override
+  {
+  }
+
+  bool ready() override
+  {
+    return true;
+  }
+};
+
 // Chaos Cleave =============================================================
+
 struct chaos_cleave_t : public demon_hunter_attack_t
 {
-  chaos_cleave_t(const std::string& n, demon_hunter_t* p) : demon_hunter_attack_t(
-    n, p, p->find_talent_spell("Chaos Cleave"))
+  chaos_cleave_t(const std::string& n, demon_hunter_t* p)
+    : demon_hunter_attack_t(n, p, p->find_talent_spell("Chaos Cleave"))
   {
     may_miss = may_crit = proc = callbacks = may_dodge = may_parry = may_block = false;
     background = true;
@@ -3710,44 +3821,6 @@ struct chaos_cleave_t : public demon_hunter_attack_t
     }
 
     return RESULT_HIT;
-  }
-};
-
-// Annihilation =============================================================
-
-struct annihilation_t : public chaos_strike_base_t
-{
-  annihilation_t( demon_hunter_t* p, const std::string& options_str )
-    : chaos_strike_base_t( "annihilation", p, p -> spec.annihilation,
-                           options_str )
-  {
-    if ( p -> annihilation_attacks.empty() )
-    {
-      p -> annihilation_attacks.push_back(
-        new chaos_strike_damage_t( p, data().effectN( 2 ), this ) );
-      p -> annihilation_attacks.push_back(
-        new chaos_strike_damage_t( p, data().effectN( 3 ), this ) );
-
-      // Jul 12 2016: Only first attack procs Fel Barrage.
-      p -> annihilation_attacks.front() -> may_proc_fel_barrage = true;
-    }
-
-    attacks = p -> annihilation_attacks;
-
-    if (p->talent.chaos_cleave->ok())
-    {
-      add_child(p->active.chaos_cleave_annihilation);
-    }
-  }
-
-  bool ready() override
-  {
-    if ( !p() -> buff.metamorphosis -> check() )
-    {
-      return false;
-    }
-
-    return chaos_strike_base_t::ready();
   }
 };
 
@@ -3806,27 +3879,19 @@ struct death_sweep_t : public blade_dance_base_t
 
 struct demons_bite_t : public demon_hunter_attack_t
 {
-  unsigned energize_die_sides;
-
   demons_bite_t( demon_hunter_t* p, const std::string& options_str )
-    : demon_hunter_attack_t(
-        "demons_bite", p, p -> find_class_spell( "Demon's Bite" ), options_str )
+    : demon_hunter_attack_t( "demons_bite", p, p -> find_class_spell( "Demon's Bite" ), options_str )
   {
-    energize_die_sides   = data().effectN( 3 ).die_sides();
     may_proc_fel_barrage = true;  // Jul 12 2016
+
+    energize_die_sides = data().effectN(3).die_sides();
 
     base_multiplier *= 1.0 + p -> artifact.demon_rage.percent();
   }
 
   void execute() override
   {
-    // Modify base amount so it properly benefits from multipliers.
-    double old_amount = energize_amount;
-    energize_amount += ( int )rng().range( 1, 1 + energize_die_sides );
-
     demon_hunter_attack_t::execute();
-
-    energize_amount = old_amount;
 
     if ( p() -> buff.metamorphosis -> check() )
     {
@@ -3836,7 +3901,7 @@ struct demons_bite_t : public demon_hunter_attack_t
     if (p()->legendary.anger_of_the_halfgiants_fury > 0)
     {
       const int range = p()->legendary.anger_of_the_halfgiants_fury;
-      p()->resource_gain(RESOURCE_FURY, (int)rng().range(1, 1 + range), p()->gain.anger_of_the_halfgiants);
+      p()->resource_gain(RESOURCE_FURY, static_cast<int>(rng().range(1, 1 + range)), p()->gain.anger_of_the_halfgiants);
     }
   }
 
@@ -3867,26 +3932,15 @@ struct demons_bite_t : public demon_hunter_attack_t
 
 struct demon_blades_t : public demon_hunter_attack_t
 {
-  unsigned energize_die_sides;
-
   demon_blades_t( demon_hunter_t* p )
     : demon_hunter_attack_t( "demon_blades", p, p -> find_spell( 203796 ) )
   {
     background           = true;
-    cooldown -> duration   = p -> talent.demon_blades -> internal_cooldown();
-    energize_die_sides   = data().effectN( 3 ).die_sides();
     may_proc_fel_barrage = true;  // Jul 12 2016
 
+    energize_die_sides = data().effectN(3).die_sides();
+
     base_multiplier *= 1.0 + p -> artifact.demon_rage.percent();
-  }
-
-  double composite_energize_amount( const action_state_t* s ) const override
-  {
-    double ea = demon_hunter_attack_t::composite_energize_amount( s );
-
-    ea += ( int )rng().range( 1, 1 + energize_die_sides );
-
-    return ea;
   }
 
   void impact( action_state_t* s ) override
@@ -3903,12 +3957,13 @@ struct demon_blades_t : public demon_hunter_attack_t
 
   void execute() override
   {
-      demon_hunter_attack_t::execute();
-      if (p()->legendary.anger_of_the_halfgiants_fury > 0)
-      {
-        const int range = p()->legendary.anger_of_the_halfgiants_fury + p()->talent.demon_blades->effectN(2).base_value();
-        p()->resource_gain(RESOURCE_FURY, (int)rng().range(1, 1 + range), p()->gain.anger_of_the_halfgiants);
-      }
+    demon_hunter_attack_t::execute();
+
+    if (p()->legendary.anger_of_the_halfgiants_fury > 0)
+    {
+      const int range = p()->legendary.anger_of_the_halfgiants_fury + p()->talent.demon_blades->effectN(2).base_value();
+      p()->resource_gain(RESOURCE_FURY, static_cast<int>(rng().range(1, 1 + range)), p()->gain.anger_of_the_halfgiants);
+    }
   }
 };
 
@@ -4181,11 +4236,9 @@ struct fury_of_the_illidari_t : public demon_hunter_attack_t
     {
       demon_hunter_attack_t::impact( s );
 
-      if ( result_is_hit( s -> result ) &&
-           p() -> artifact.rage_of_the_illidari.rank() )
+      if ( result_is_hit( s -> result ) && p() -> artifact.rage_of_the_illidari.rank() )
       {
-        p() -> buff.rage_of_the_illidari -> trigger(
-          1,
+        p() -> buff.rage_of_the_illidari -> trigger( 1,
           p() -> buff.rage_of_the_illidari -> current_value + s -> result_amount );
       }
     }
@@ -4494,7 +4547,7 @@ struct soul_cleave_t : public demon_hunter_attack_t
   {
     demon_hunter_attack_t::execute();
 
-    double pain_multiplier = resource_consumed / base_costs[ current_resource() ];
+    double pain_multiplier = last_resource_cost / base_costs[ current_resource() ];
 
     // Heal happens first.
     action_state_t* heal_state = heal -> get_state();
@@ -4717,12 +4770,12 @@ private:
 
 // Anguish ==================================================================
 
-struct anguish_debuff_t : public demon_hunter_buff_t<debuff_t>
+struct anguish_debuff_t : public demon_hunter_buff_t<buff_t>
 {
   action_t* anguish;
 
   anguish_debuff_t( demon_hunter_t* p, player_t* target )
-    : demon_hunter_buff_t<debuff_t>(
+    : demon_hunter_buff_t<buff_t>(
         *p, buff_creator_t( actor_pair_t( target, p ), "anguish",
                             p -> artifact.anguish_of_the_deceiver.data()
                             .effectN( 1 )
@@ -4734,7 +4787,7 @@ struct anguish_debuff_t : public demon_hunter_buff_t<debuff_t>
   virtual void expire_override( int expiration_stacks,
                                 timespan_t remaining_duration ) override
   {
-    demon_hunter_buff_t<debuff_t>::expire_override( expiration_stacks,
+    demon_hunter_buff_t<buff_t>::expire_override( expiration_stacks,
         remaining_duration );
 
     // Only if the debuff expires naturally; if the target dies it doesn't deal
@@ -4818,10 +4871,10 @@ struct chaos_blades_t : public demon_hunter_buff_t<buff_t>
 
 // Nemesis ==================================================================
 
-struct nemesis_debuff_t : public demon_hunter_buff_t<debuff_t>
+struct nemesis_debuff_t : public demon_hunter_buff_t<buff_t>
 {
   nemesis_debuff_t( demon_hunter_t* p, player_t* target )
-    : demon_hunter_buff_t<debuff_t>(
+    : demon_hunter_buff_t<buff_t>(
         *p, buff_creator_t( actor_pair_t( target, p ), "nemesis",
                             p -> talent.nemesis )
         .default_value( p -> talent.nemesis -> effectN( 1 ).percent() )
@@ -4833,7 +4886,7 @@ struct nemesis_debuff_t : public demon_hunter_buff_t<debuff_t>
   virtual void expire_override( int expiration_stacks,
                                 timespan_t remaining_duration ) override
   {
-    demon_hunter_buff_t<debuff_t>::expire_override( expiration_stacks,
+    demon_hunter_buff_t<buff_t>::expire_override( expiration_stacks,
         remaining_duration );
 
     if ( remaining_duration > timespan_t::zero() )
@@ -5024,10 +5077,12 @@ struct soul_barrier_t : public demon_hunter_buff_t<absorb_buff_t>
 struct sephuzs_secret_buff_t : public haste_buff_t
 {
     cooldown_t* icd;
+
     sephuzs_secret_buff_t(demon_hunter_t* p) :
-        haste_buff_t(haste_buff_creator_t(p, "sephuzs_secret", p -> find_spell(208052))
-            .default_value(p -> find_spell(208052) -> effectN(2).percent())
-            .add_invalidate(CACHE_HASTE))
+      haste_buff_t(haste_buff_creator_t(p, "sephuzs_secret", p -> find_spell(208052))
+        .default_value(p -> find_spell(208052) -> effectN(2).percent())
+        .add_invalidate(CACHE_HASTE)
+        .add_invalidate(CACHE_RUN_SPEED))
     {
         icd = p->get_cooldown("sephuzs_secret_cooldown");
         icd->duration = p->find_spell(226262)->duration();
@@ -5233,7 +5288,7 @@ private:
   {
     double tm                  = 0;
     std::vector<player_t*>& tl = action -> target_list();
-    int size                   = ( int )tl.size();
+    int size                   = static_cast<int>(tl.size());
 
     for ( int i = 0; i < size && ( action -> aoe < 0 || i < action -> aoe ); i++ )
     {
@@ -5290,9 +5345,8 @@ demon_hunter_td_t::demon_hunter_td_t( player_t* target, demon_hunter_t& p )
     // Vengeance
     dots.fiery_brand = target->get_dot("fiery_brand", &p);
     dots.sigil_of_flame = target->get_dot("sigil_of_flame", &p);
-    debuffs.frailty =
-      buff_creator_t(target, "frailty", p.find_spell(224509))
-      .default_value(p.find_spell(224509)->effectN(1).percent());
+    debuffs.frailty = make_buff(target, "frailty", p.find_spell(224509))
+      -> set_default_value(p.find_spell(224509)->effectN(1).percent());
   }
 }
 
@@ -5508,14 +5562,21 @@ bool demon_hunter_t::create_actions()
     annihilation_dmg = new damage_calc_helper_t( annihilation_attacks );
   }
 
+  return ca;
+}
+
+// demon_hunter_t::activate =================================================
+
+void demon_hunter_t::activate()
+{
+  player_t::activate();
+
   if ( blade_dance_dmg || death_sweep_dmg || chaos_strike_dmg ||
        annihilation_dmg )
   {
     sim -> target_non_sleeping_list.register_callback(
       damage_calc_invalidate_callback_t( this ) );
   }
-
-  return ca;
 }
 
 // demon_hunter_t::create_buffs =============================================
@@ -5527,22 +5588,10 @@ void demon_hunter_t::create_buffs()
   using namespace buffs;
 
   // General
-
-  // FIXME: 1/22/2017 -- 7.2.0 PTR Spell Id 208195 was removed, but 163073 still remains
-  if ( maybe_ptr( dbc.ptr ) )
-  {
-    buff.demon_soul =
-      buff_creator_t( this, "demon_soul", find_spell( 163073 ) )
-      .default_value( find_spell( 163073 )->effectN( 1 ).percent() )
-      .add_invalidate( CACHE_PLAYER_DAMAGE_MULTIPLIER );
-  }
-  else
-  {
-    buff.demon_soul =
-      buff_creator_t( this, "demon_soul", find_spell( 208195 ) )
-      .default_value( find_spell( 208195 )->effectN( 1 ).percent() )
-      .add_invalidate( CACHE_PLAYER_DAMAGE_MULTIPLIER );
-  }
+  buff.demon_soul =
+    buff_creator_t( this, "demon_soul", find_spell( 163073 ) )
+    .default_value( find_spell( 163073 )->effectN( 1 ).percent() )
+    .add_invalidate( CACHE_PLAYER_DAMAGE_MULTIPLIER );
 
   buff.metamorphosis = new buffs::metamorphosis_buff_t( this );
 
@@ -5587,15 +5636,15 @@ void demon_hunter_t::create_buffs()
   // TODO: Buffs for each race?
   buff.nemesis = buff_creator_t( this, "nemesis_buff", find_spell( 208605 ) )
                  .add_invalidate( CACHE_PLAYER_DAMAGE_MULTIPLIER );
-  
+
+  const double prepared_value = 
+    (talent.prepared->effectN(1).trigger()->effectN(1).resource(RESOURCE_FURY) / 50)
+    * (1.0 + sets.set(DEMON_HUNTER_HAVOC, T19, B2)->effectN(1).percent());
   buff.prepared =
-    buff_creator_t(this, "prepared",
-      talent.prepared->effectN(1).trigger())
+    buff_creator_t(this, "prepared", talent.prepared->effectN(1).trigger())
+    .default_value(prepared_value)
     .trigger_spell(talent.prepared)
     .period(timespan_t::from_millis(100))
-    .default_value(talent.prepared->effectN(1).trigger()->effectN(1).resource(RESOURCE_FURY) *
-    (1.0 + sets.set(DEMON_HUNTER_HAVOC, T19, B2)->effectN(1).percent()) /
-      (talent.prepared->effectN(1).trigger()->duration().total_millis() / 100))
     .tick_callback([this](buff_t* b, int, const timespan_t&) {
     resource_gain(RESOURCE_FURY, b->check_value(), gain.prepared);
   });
@@ -5603,8 +5652,7 @@ void demon_hunter_t::create_buffs()
   buff.blind_fury =
     buff_creator_t(this, "blind_fury", spec.eye_beam)
     .cd(timespan_t::zero())
-    .default_value(talent.blind_fury->effectN(3).resource(RESOURCE_FURY) *
-    (1.0 + sets.set(DEMON_HUNTER_HAVOC, T19, B2)->effectN(1).percent()) / 50)
+    .default_value(talent.blind_fury->effectN(3).resource(RESOURCE_FURY) / 50)
     .duration(spec.eye_beam->duration() * (1.0 + talent.blind_fury->effectN(1).percent()))
     .period(timespan_t::from_millis(100))
     .tick_zero(true)
@@ -5615,8 +5663,7 @@ void demon_hunter_t::create_buffs()
   buff.rage_of_the_illidari =
     buff_creator_t( this, "rage_of_the_illidari", find_spell( 217060 ) );
 
-  buff.vengeful_retreat_move = new movement_buff_t(
-    this,
+  buff.vengeful_retreat_move = new movement_buff_t(this,
     buff_creator_t( this, "vengeful_retreat_movement", spell_data_t::nil() )
     .chance( 1.0 )
     .duration( spec.vengeful_retreat -> duration() ) );
@@ -5834,7 +5881,7 @@ struct metamorphosis_buff_demonic_expr_t : public expr_t
   double evaluate() override
   {
     buffs::metamorphosis_buff_t* metamorphosis = debug_cast<buffs::metamorphosis_buff_t*>(dh->buff.metamorphosis);
-    if (metamorphosis && metamorphosis->extended_by_demonic)
+    if (metamorphosis && metamorphosis->check() && metamorphosis->extended_by_demonic)
       return true;
 
     return false;
@@ -6238,10 +6285,10 @@ void demon_hunter_t::init_rng()
       rppm.felblade_havoc = get_rppm("felblade", find_spell(203557));
       rppm.felblade_havoc->set_frequency(rppm.felblade_havoc->get_frequency()*1.5);
   }
-  
 
   // Havoc
   rppm.inner_demons = get_rppm( "inner_demons", artifact.inner_demons );
+  rppm.fel_barrage = get_rppm("fel_barrage", find_spell(222703));
 
   // Vengeance
   rppm.fueled_by_pain = get_rppm( "fueled_by_pain", artifact.fueled_by_pain );
@@ -6283,12 +6330,7 @@ void demon_hunter_t::init_spells()
   spec.metamorphosis          = find_class_spell("Metamorphosis");
   spec.metamorphosis_buff     = specialization() == DEMON_HUNTER_HAVOC
                                  ? find_spell( 162264 ) : find_spell( 187827 );
-
-  // FIXME: 1/22/2017 -- 7.2.0 PTR Spell Id 204255 was removed, but 203795 still remains
-  if(maybe_ptr( dbc.ptr ) )
-    spec.soul_fragment = find_spell(203795);
-  else
-    spec.soul_fragment = find_spell(204255);
+  spec.soul_fragment          = find_spell(204255);
 
   // Havoc
   spec.havoc               = find_specialization_spell( "Havoc Demon Hunter" );
@@ -6432,25 +6474,6 @@ void demon_hunter_t::init_spells()
       talent.demonic_appetite -> internal_cooldown();
   }
 
-  if ( talent.fel_barrage -> ok() )
-  {
-    spec.fel_barrage_proc = find_spell( 222703 );
-
-    /* Sep 23 2016: Via hotfix, this ability was changed in some mysterious
-    unknown manner. Proc mechanic is now totally serverside.
-    http://blue.mmo-champion.com/topic/767333-hotfixes-september-16/
-
-    Assuming proc chance and ICD are unchanged and that ICD starts on-attempt
-    instead of on-success now.
-
-    As a result, chance and ICD are now hardcoded (they are no longer in the
-    spell data).*/
-
-    /* Subsequent Fury of the Illidari ticks (500ms interval) cannot proc,
-    so use 501ms instead of 500. */
-    cooldown.fel_barrage_proc -> duration = timespan_t::from_millis( 501 );
-  }
-
   using namespace actions::attacks;
   using namespace actions::spells;
   using namespace actions::heals;
@@ -6495,6 +6518,12 @@ void demon_hunter_t::init_spells()
   {
     active.chaos_cleave = new chaos_cleave_t("chaos_cleave", this );
     active.chaos_cleave_annihilation = new chaos_cleave_t("chaos_cleave_annihilation", this);
+  }
+
+  if (artifact.chaotic_onslaught.rank())
+  {
+    active.chaotic_onslaught = new chaotic_onslaught_t(this);
+    active.chaotic_onslaught_annihilation = new chaotic_onslaught_annihilation_t(this);
   }
 
   if ( artifact.charred_warblades.rank() )
@@ -6618,11 +6647,11 @@ void demon_hunter_t::apl_precombat()
     {
       if (specialization() == DEMON_HUNTER_HAVOC)
       {
-        pre->add_action("food,type=the_hungry_magister,if=!equipped.majordomos_dinner_bell");
+        pre->add_action("food,type=lavish_suramar_feast,if=!equipped.majordomos_dinner_bell");
         pre->add_action("food,type=nightborne_delicacy_platter,if=equipped.majordomos_dinner_bell");
       }
       else
-        pre -> add_action( "food,type=nightborne_delicacy_platter" );
+        pre -> add_action( "food,type=lavish_suramar_feast" );
     }
     else
     {
@@ -6686,7 +6715,7 @@ void add_havoc_use_items( demon_hunter_t* p, action_priority_list_t* apl )
       }
       else if (util::str_compare_ci(p->items[i].name_str, "gnawed_thumb_ring"))
       {
-        line += ",if=!talent.chaos_blades.enabled|buff.chaos_blades.up|cooldown.chaos_blades.remains>60";
+        line += ",if=!talent.chaos_blades.enabled|buff.chaos_blades.up|target.time_to_die<cooldown.chaos_blades.remains";
       }
       else if (util::str_compare_ci(p->items[i].name_str, "majordomos_dinner_bell") 
             || util::str_compare_ci(p->items[i].name_str, "skardyns_grace"))
@@ -6723,7 +6752,7 @@ void add_havoc_use_items( demon_hunter_t* p, action_priority_list_t* apl )
 
 void demon_hunter_t::apl_havoc()
 {
-  talent_overrides_str += "/fel_barrage,if=active_enemies>1|raid_event.adds.exists";
+  talent_overrides_str += "/fel_barrage,if=(active_enemies>1|raid_event.adds.exists)&!talent.demonic.enabled";
   talent_overrides_str += "/momentum,if=active_enemies>1|raid_event.adds.exists";
 
   action_priority_list_t* def = get_action_priority_list( "default" );
@@ -6734,96 +6763,119 @@ void demon_hunter_t::apl_havoc()
     "!(!talent.nemesis.enabled|cooldown.nemesis.ready|cooldown.nemesis.remains>target.time_to_die|cooldown.nemesis.remains>60)");
   def->add_action("variable,name=waiting_for_chaos_blades,value="
     "!(!talent.chaos_blades.enabled|cooldown.chaos_blades.ready|cooldown.chaos_blades.remains>target.time_to_die|cooldown.chaos_blades.remains>60)");
-  def -> add_action( "variable,name=pooling_for_meta,value=cooldown.metamorphosis.remains<6&fury.deficit>30&!talent.demonic.enabled"
+  def -> add_action( "variable,name=pooling_for_meta,value=!talent.demonic.enabled&cooldown.metamorphosis.remains<6&fury.deficit>30"
     "&(!variable.waiting_for_nemesis|cooldown.nemesis.remains<10)&(!variable.waiting_for_chaos_blades|cooldown.chaos_blades.remains<6)",
     "\"Getting ready to use meta\" conditions, this is used in a few places." );
-  def -> add_action( "variable,name=blade_dance,value=talent.first_blood.enabled|"
-    "spell_targets.blade_dance1>=3+(talent.chaos_cleave.enabled*2)",
-    "Blade Dance conditions. Always if First Blood is talented, otherwise 5+ targets with Chaos "
-    "Cleave or 3+ targets without." );
+  def -> add_action( "variable,name=blade_dance,value=talent.first_blood.enabled|set_bonus.tier20_2pc"
+    "|spell_targets.blade_dance1>=3+(talent.chaos_cleave.enabled*2)",
+    "Blade Dance conditions. Always if First Blood is talented or the T20 2pc set bonus,"
+    " otherwise at 5+ targets with Chaos Cleave or 3+ targets without." );
   def -> add_action( "variable,name=pooling_for_blade_dance,value=variable.blade_dance&"
     "fury-40<35-talent.first_blood.enabled*20&(spell_targets.blade_dance1>=3+(talent.chaos_cleave.enabled*2))",
-    "Blade Dance pooling condition, so we don't spend too much fury when we need it soon. No need "
-    "to pool on\n# single target since First Blood already makes it cheap enough and delaying it a"
+    "Blade Dance pooling condition, so we don't spend too much fury when we need it soon. No need"
+    " to pool on\n# single target since First Blood already makes it cheap enough and delaying it a"
     " tiny bit isn't a big deal." );
   def -> add_action("variable,name=pooling_for_chaos_strike,value=talent.chaos_cleave.enabled&fury.deficit>40&!raid_event.adds.up&raid_event.adds.in<2*gcd",
     "Chaos Strike pooling condition, so we don't spend too much fury when we need it for Chaos Cleave AoE");
   
   // Cooldown List
-  def -> add_action( "call_action_list,name=cooldown,if=gcd.remains=0" );
+  def->add_action(this, "Consume Magic");
+  def->add_action("call_action_list,name=cooldown,if=gcd.remains=0");
+  def->add_action("run_action_list,name=demonic,if=talent.demonic.enabled&talent.demonic_appetite.enabled&talent.blind_fury.enabled");
+  def->add_action("run_action_list,name=normal");
+
+  action_priority_list_t* demonic = get_action_priority_list("demonic", "Specific APL for the Blind Fury+Demonic Appetite+Demonic build");
+  demonic->add_action("pick_up_fragment,if=fury.deficit>=35&cooldown.eye_beam.remains>5");
+  demonic->add_action(this, "Vengeful Retreat", "if=(talent.prepared.enabled|talent.momentum.enabled)&buff.prepared.down&buff.momentum.down",
+    "Vengeful Retreat backwards through the target to minimize downtime.");
+  demonic->add_action(this, "Fel Rush", "if=(talent.momentum.enabled|talent.fel_mastery.enabled)&"
+    "(!talent.momentum.enabled|(charges=2|cooldown.vengeful_retreat.remains>4)&buff.momentum.down)&"
+    "(charges=2|(raid_event.movement.in>10&raid_event.adds.in>10))",
+    "Fel Rush for Momentum.");
+  demonic->add_action(this, "Throw Glaive", "if=talent.bloodlet.enabled&(!talent.momentum.enabled|buff.momentum.up)&charges=2");
+  demonic->add_action(this, spec.death_sweep, "death_sweep", "if=variable.blade_dance");
+  demonic->add_talent(this, "Fel Eruption");
+  demonic->add_action(this, artifact.fury_of_the_illidari, "fury_of_the_illidari",
+    "if=(active_enemies>desired_targets|raid_event.adds.in>55)&(!talent.momentum.enabled|buff.momentum.up)");
+  demonic->add_action(this, "Blade Dance", "if=variable.blade_dance&cooldown.eye_beam.remains>5&!cooldown.metamorphosis.ready");
+  demonic->add_action(this, "Throw Glaive", "if=talent.bloodlet.enabled&spell_targets>=2&"
+    "(!talent.master_of_the_glaive.enabled|!talent.momentum.enabled|buff.momentum.up)&"
+    "(spell_targets>=3|raid_event.adds.in>recharge_time+cooldown)");
+  demonic->add_action(this, "Eye Beam", "if=spell_targets.eye_beam_tick>desired_targets|!buff.metamorphosis.extended_by_demonic");
+  demonic->add_action(this, spec.annihilation, "annihilation", 
+    "if=(!talent.momentum.enabled|buff.momentum.up|fury.deficit<30+buff.prepared.up*8|buff.metamorphosis.remains<5)&"
+    "!variable.pooling_for_blade_dance");
+  demonic->add_action(this, "Throw Glaive", "if=talent.bloodlet.enabled&"
+    "(!talent.master_of_the_glaive.enabled|!talent.momentum.enabled|buff.momentum.up)&raid_event.adds.in>recharge_time+cooldown");
+  demonic->add_action(this, "Chaos Strike", "if=(!talent.momentum.enabled|buff.momentum.up|fury.deficit<30+buff.prepared.up*8)&"
+    "!variable.pooling_for_chaos_strike&!variable.pooling_for_meta&!variable.pooling_for_blade_dance");
+  demonic->add_action(this, "Fel Rush", "if=!talent.momentum.enabled&buff.metamorphosis.down&(charges=2|(raid_event.movement.in>10&raid_event.adds.in>10))");
+  demonic->add_action(this, "Demon's Bite");
+  demonic->add_action(this, "Throw Glaive", "if=buff.out_of_range.up");
+  demonic->add_action(this, "Fel Rush", "if=movement.distance>15|(buff.out_of_range.up&!talent.momentum.enabled)");
+  demonic->add_action(this, "Vengeful Retreat", "if=movement.distance>15");
 
   // Start Main Actions
-  def -> add_action( "pick_up_fragment,if=talent.demonic_appetite.enabled&fury.deficit>=35&(!talent.demonic.enabled|cooldown.eye_beam.remains>5)" );
-  def -> add_action( this, "Consume Magic" );
-  def -> add_action( this, "Vengeful Retreat", "if=(talent.prepared.enabled|talent.momentum.enabled)&buff.prepared.down&buff.momentum.down",
-    "Vengeful Retreat backwards through the target to minimize downtime." );
-  def -> add_action( this, "Fel Rush", "if=(talent.momentum.enabled|talent.fel_mastery.enabled)&"
+  action_priority_list_t* normal = get_action_priority_list("normal", "General APL for Non-Demonic Builds");
+  normal->add_action("pick_up_fragment,if=talent.demonic_appetite.enabled&fury.deficit>=35");
+  normal->add_action(this, "Vengeful Retreat", "if=(talent.prepared.enabled|talent.momentum.enabled)&buff.prepared.down&buff.momentum.down",
+    "Vengeful Retreat backwards through the target to minimize downtime.");
+  normal->add_action(this, "Fel Rush", "if=(talent.momentum.enabled|talent.fel_mastery.enabled)&"
     "(!talent.momentum.enabled|(charges=2|cooldown.vengeful_retreat.remains>4)&buff.momentum.down)&"
     "(!talent.fel_mastery.enabled|fury.deficit>=25)&(charges=2|(raid_event.movement.in>10&raid_event.adds.in>10))",
-    "Fel Rush for Momentum and for fury from Fel Mastery." );
-  def -> add_talent( this, "Fel Barrage", "if=charges>=5&(buff.momentum.up|!talent.momentum.enabled)&"
-    "((active_enemies>desired_targets&active_enemies>1)|raid_event.adds.in>30)",
-    "Use Fel Barrage at max charges, saving it for Momentum and adds if possible." );
-  def -> add_action( this, "Throw Glaive", "if=talent.bloodlet.enabled&(!talent.momentum.enabled|"
-    "buff.momentum.up)&charges=2" );
-  def -> add_talent( this, "Felblade", "if=fury<15&(cooldown.death_sweep.remains<2*gcd|cooldown.blade_dance.remains<2*gcd)");
-  def -> add_action( this, spec.death_sweep, "death_sweep", "if=variable.blade_dance");
-  def -> add_action( this, "Fel Rush", "if=charges=2&!talent.momentum.enabled&!talent.fel_mastery.enabled");
-  def -> add_talent( this, "Fel Eruption");
-  def -> add_action( this, artifact.fury_of_the_illidari, "fury_of_the_illidari",
-    "if=(active_enemies>desired_targets&active_enemies>1)|raid_event.adds.in>55&(!talent.momentum.enabled|buff.momentum.up)&"
+    "Fel Rush for Momentum and for fury from Fel Mastery.");
+  normal->add_talent(this, "Fel Barrage", "if=(charges=max_charges)&(buff.momentum.up|!talent.momentum.enabled)&"
+    "(active_enemies>desired_targets|raid_event.adds.in>30)",
+    "Use Fel Barrage at max charges, saving it for Momentum and adds if possible.");
+  normal->add_action(this, "Throw Glaive", "if=talent.bloodlet.enabled&(!talent.momentum.enabled|buff.momentum.up)&charges=2");
+  normal->add_talent(this, "Felblade", "if=fury<15&(cooldown.death_sweep.remains<2*gcd|cooldown.blade_dance.remains<2*gcd)");
+  normal->add_action(this, spec.death_sweep, "death_sweep", "if=variable.blade_dance");
+  normal->add_action(this, "Fel Rush", "if=charges=2&!talent.momentum.enabled&!talent.fel_mastery.enabled");
+  normal->add_talent(this, "Fel Eruption");
+  normal->add_action(this, artifact.fury_of_the_illidari, "fury_of_the_illidari",
+    "if=(active_enemies>desired_targets|raid_event.adds.in>55)&(!talent.momentum.enabled|buff.momentum.up)&"
     "(!talent.chaos_blades.enabled|buff.chaos_blades.up|cooldown.chaos_blades.remains>30|target.time_to_die<cooldown.chaos_blades.remains)");
-  def -> add_action( this, "Eye Beam", "if=talent.demonic.enabled&"
-    "(talent.demon_blades.enabled|(talent.blind_fury.enabled&fury.deficit>=35)|(!talent.blind_fury.enabled&fury.deficit<30))&"
-    "((active_enemies>desired_targets&active_enemies>1)|raid_event.adds.in>30)" );
-  def -> add_action( this, "Blade Dance", "if=variable.blade_dance&(!talent.demonic.enabled|cooldown.eye_beam.remains>5)&(!cooldown.metamorphosis.ready)" );
-  def -> add_action( this, "Throw Glaive", "if=talent.bloodlet.enabled&spell_targets>=2&"
+  normal->add_action(this, "Blade Dance", "if=variable.blade_dance&(!cooldown.metamorphosis.ready)");
+  normal->add_action(this, "Throw Glaive", "if=talent.bloodlet.enabled&spell_targets>=2&"
     "(!talent.master_of_the_glaive.enabled|!talent.momentum.enabled|buff.momentum.up)&"
-    "(spell_targets>=3|raid_event.adds.in>recharge_time+cooldown)" );
-  def -> add_talent( this, "Felblade", "if=fury.deficit>=30+buff.prepared.up*8" );
-  def -> add_action( this, "Eye Beam", "if=talent.blind_fury.enabled&(spell_targets.eye_beam_tick>desired_targets|fury.deficit>=35)");
-  def -> add_action( this, spec.annihilation, "annihilation", "if=(talent.demon_blades.enabled|"
+    "(spell_targets>=3|raid_event.adds.in>recharge_time+cooldown)");
+  normal->add_talent(this, "Felblade", "if=fury.deficit>=30+buff.prepared.up*8");
+  normal->add_action(this, "Eye Beam", "if=talent.blind_fury.enabled&(spell_targets.eye_beam_tick>desired_targets|fury.deficit>=35)");
+  normal->add_action(this, spec.annihilation, "annihilation", "if=(talent.demon_blades.enabled|"
     "!talent.momentum.enabled|buff.momentum.up|fury.deficit<30+buff.prepared.up*8|"
-    "buff.metamorphosis.remains<5)&!variable.pooling_for_blade_dance" );
-  def -> add_action( this, "Throw Glaive", "if=talent.bloodlet.enabled&"
-    "(!talent.master_of_the_glaive.enabled|!talent.momentum.enabled|buff.momentum.up)&raid_event.adds.in>recharge_time+cooldown" );
-  def -> add_action( this, "Eye Beam", "if=!talent.demonic.enabled&!talent.blind_fury.enabled&"
-    "((spell_targets.eye_beam_tick>desired_targets&active_enemies>1)|"
-    "(!set_bonus.tier19_4pc&raid_event.adds.in>45&!variable.pooling_for_meta&buff.metamorphosis.down&"
-    "(artifact.anguish_of_the_deceiver.enabled|active_enemies>1)&!talent.chaos_cleave.enabled))" );
-  def -> add_action( this, "Demon's Bite", "if=talent.demonic.enabled&!talent.blind_fury.enabled&buff.metamorphosis.down&"
-    "cooldown.eye_beam.remains<gcd&fury.deficit>=20",
-    "If Demonic is talented, pool fury as Eye Beam is coming off cooldown." );
-  def -> add_action( this, "Demon's Bite", "if=talent.demonic.enabled&!talent.blind_fury.enabled&buff.metamorphosis.down&"
-    "cooldown.eye_beam.remains<2*gcd&fury.deficit>=45" );
-  def -> add_action( this, "Throw Glaive", "if=buff.metamorphosis.down&spell_targets>=2" );
-  def -> add_action( this, "Chaos Strike", "if=(talent.demon_blades.enabled|"
+    "buff.metamorphosis.remains<5)&!variable.pooling_for_blade_dance");
+  normal->add_action(this, "Throw Glaive", "if=talent.bloodlet.enabled&"
+    "(!talent.master_of_the_glaive.enabled|!talent.momentum.enabled|buff.momentum.up)&raid_event.adds.in>recharge_time+cooldown");
+  normal->add_action(this, "Eye Beam", "if=!talent.blind_fury.enabled&(spell_targets.eye_beam_tick>desired_targets|("
+    "!set_bonus.tier19_4pc&raid_event.adds.in>45&!variable.pooling_for_meta&buff.metamorphosis.down&"
+    "(artifact.anguish_of_the_deceiver.enabled|active_enemies>1)&!talent.chaos_cleave.enabled))");
+  normal->add_action(this, "Throw Glaive", "if=buff.metamorphosis.down&spell_targets>=2");
+  normal->add_action(this, "Chaos Strike", "if=(talent.demon_blades.enabled|"
     "!talent.momentum.enabled|buff.momentum.up|fury.deficit<30+buff.prepared.up*8)&"
-    "!variable.pooling_for_chaos_strike&!variable.pooling_for_meta&!variable.pooling_for_blade_dance&(!talent.demonic.enabled|"
-    "!cooldown.eye_beam.ready|(talent.blind_fury.enabled&fury.deficit<35))" );
-  def -> add_talent( this, "Fel Barrage", "if=charges=4&buff.metamorphosis.down&(buff.momentum.up|"
-    "!talent.momentum.enabled)&((active_enemies>desired_targets&active_enemies>1)|raid_event.adds.in>30)",
-    "Use Fel Barrage if its nearing max charges, saving it for Momentum and adds if possible." );
-  def -> add_action( this, "Fel Rush", "if=!talent.momentum.enabled&"
-    "raid_event.movement.in>charges*10&(talent.demon_blades.enabled|buff.metamorphosis.down)" );
-  def -> add_action( this, "Demon's Bite" );
-  def -> add_action( this, "Throw Glaive", "if=buff.out_of_range.up" );
-  def -> add_talent( this, "Felblade", "if=movement.distance|buff.out_of_range.up" );
-  def -> add_action( this, "Fel Rush", "if=movement.distance>15|(buff.out_of_range.up&"
-    "!talent.momentum.enabled)" );
-  def -> add_action( this, "Vengeful Retreat", "if=movement.distance>15" );
-  def -> add_action( this, "Throw Glaive", "if=!talent.bloodlet.enabled" );
+    "!variable.pooling_for_chaos_strike&!variable.pooling_for_meta&!variable.pooling_for_blade_dance");
+  normal->add_talent(this, "Fel Barrage", "if=(charges=max_charges-1)&buff.metamorphosis.down&(buff.momentum.up|"
+    "!talent.momentum.enabled)&(active_enemies>desired_targets|raid_event.adds.in>30)",
+    "Use Fel Barrage if its nearing max charges, saving it for Momentum and adds if possible.");
+  normal->add_action(this, "Fel Rush", "if=!talent.momentum.enabled&raid_event.movement.in>charges*10&(talent.demon_blades.enabled|buff.metamorphosis.down)");
+  normal->add_action(this, "Demon's Bite");
+  normal->add_action(this, "Throw Glaive", "if=buff.out_of_range.up");
+  normal->add_talent(this, "Felblade", "if=movement.distance|buff.out_of_range.up");
+  normal->add_action(this, "Fel Rush", "if=movement.distance>15|(buff.out_of_range.up&!talent.momentum.enabled)");
+  normal->add_action(this, "Vengeful Retreat", "if=movement.distance>15");
+  normal->add_action(this, "Throw Glaive", "if=!talent.bloodlet.enabled");
 
   // Cooldown List
-  action_priority_list_t* cd = get_action_priority_list( "cooldown" );
-  cd -> add_action( this, "Metamorphosis", "if=!(variable.pooling_for_meta|variable.waiting_for_nemesis|variable.waiting_for_chaos_blades)|target.time_to_die<25",
+  action_priority_list_t* cd = get_action_priority_list("cooldown");
+  cd->add_action(this, "Metamorphosis", "if=!(talent.demonic.enabled|"
+    "variable.pooling_for_meta|variable.waiting_for_nemesis|variable.waiting_for_chaos_blades)|target.time_to_die<25",
     "Use Metamorphosis when we are done pooling Fury and when we are not waiting for other cooldowns to sync.");
-  cd -> add_talent( this, "Nemesis", "target_if=min:target.time_to_die,if=raid_event.adds.exists&"
-    "debuff.nemesis.down&((active_enemies>desired_targets&active_enemies>1)|raid_event.adds.in>60)",
+  cd->add_action(this, "Metamorphosis", "if=talent.demonic.enabled&buff.metamorphosis.up&fury<40");
+  cd->add_talent(this, "Nemesis", "target_if=min:target.time_to_die,if=raid_event.adds.exists&"
+    "debuff.nemesis.down&(active_enemies>desired_targets|raid_event.adds.in>60)",
     "If adds are present, use Nemesis on the lowest HP add in order to get the Nemesis buff for AoE");
-  cd -> add_talent( this, "Nemesis", "if=!raid_event.adds.exists&"
+  cd->add_talent(this, "Nemesis", "if=!raid_event.adds.exists&"
     "(buff.chaos_blades.up|buff.metamorphosis.up|cooldown.metamorphosis.adjusted_remains<20|target.time_to_die<=60)");
-  cd -> add_talent( this, "Chaos Blades", "if=buff.metamorphosis.up|cooldown.metamorphosis.adjusted_remains>60|target.time_to_die<=12" );
+  cd->add_talent(this, "Chaos Blades", "if=buff.metamorphosis.up|cooldown.metamorphosis.adjusted_remains>60|target.time_to_die<=12");
   
   add_havoc_use_items(this, cd);
 
@@ -6909,7 +6961,6 @@ void demon_hunter_t::create_cooldowns()
   cooldown.demonic_appetite     = get_cooldown( "demonic_appetite" );
   cooldown.eye_beam             = get_cooldown( "eye_beam" );
   cooldown.fel_barrage          = get_cooldown( "fel_barrage" );
-  cooldown.fel_barrage_proc     = get_cooldown( "fel_barrage_proc" );
   cooldown.fel_rush             = get_cooldown( "fel_rush" );
   cooldown.fel_rush_secondary   = get_cooldown( "fel_rush_secondary" );
   cooldown.fury_of_the_illidari = get_cooldown( "fury_of_the_illidari" );
@@ -7051,6 +7102,16 @@ double demon_hunter_t::composite_melee_haste() const
     mh /= 1.0 + buff.metamorphosis -> check_value();
   }
 
+  if (legendary.sephuzs_secret)
+  {
+    if (buff.sephuzs_secret->check())
+    {
+      mh /= 1.0 + buff.sephuzs_secret->check_value();
+    }
+
+    mh /= 1.0 + legendary.sephuzs_secret->effectN(3).percent();
+  }
+
   return mh;
 }
 
@@ -7063,6 +7124,16 @@ double demon_hunter_t::composite_spell_haste() const
   if ( specialization() == DEMON_HUNTER_HAVOC )
   {
     sh /= 1.0 + buff.metamorphosis -> check_value();
+  }
+
+  if (legendary.sephuzs_secret)
+  {
+    if (buff.sephuzs_secret->check())
+    {
+      sh /= 1.0 + buff.sephuzs_secret->check_value();
+    }
+
+    sh /= 1.0 + legendary.sephuzs_secret->effectN(3).percent();
   }
 
   return sh;
@@ -7234,8 +7305,15 @@ double demon_hunter_t::passive_movement_modifier() const
   double ms = player_t::passive_movement_modifier();
 
   if ( mastery_spell.demonic_presence -> ok() )
+  {
     ms += cache.mastery() *
           mastery_spell.demonic_presence -> effectN( 2 ).mastery_value();
+  }
+
+  if (legendary.sephuzs_secret)
+  {
+    ms += legendary.sephuzs_secret->effectN(2).percent();
+  }
 
   return ms;
 }
@@ -7246,7 +7324,12 @@ double demon_hunter_t::temporary_movement_modifier() const
 {
   double ms = player_t::temporary_movement_modifier();
 
-  ms += std::max( ms, buff.immolation_aura -> value() );
+  ms = std::max(ms, buff.immolation_aura->value());
+
+  if (buff.sephuzs_secret->check())
+  {
+    ms += buff.sephuzs_secret->data().effectN(1).percent();
+  }
 
   return ms;
 }
@@ -7775,8 +7858,11 @@ struct moarg_bionic_stabilizers_t
 
   void manipulate( throw_glaive_t* action, const special_effect_t& e ) override
   {
-    action -> chain_bonus_damage += e.driver() -> effectN( 1 ).percent();
-  }  // TOCHECK
+    const spell_data_t* driver = e.driver();
+
+    action->base_multiplier *= 1.0 + driver->effectN(2).percent();
+    action->chain_bonus_damage += driver->effectN(1).percent();
+  }
 };
 
 // Vengeance-specific legendary items
@@ -7900,7 +7986,10 @@ struct loramus_thalipedes_sacrifice_t
   void manipulate( fel_rush_t::fel_rush_damage_t* action,
                    const special_effect_t& e ) override
   {
-    action -> chain_bonus_damage += e.driver() -> effectN( 1 ).percent();
+    double dm = e.driver()->effectN(1).percent();
+    
+    action->base_multiplier *= 1.0 + dm;
+    action->chain_bonus_damage += dm;
   }
 };
 

@@ -35,82 +35,40 @@ def hotfix_fields(orig, hotfix):
         name = orig._fi[idx]
         if 'S' in fmt and orig._dbcp.get_string(orig._d[idx]) != hotfix._dbcp.get_string(hotfix._d[idx]):
             # Blacklist check
-            if name not in HOTFIX_FIELD_BLACKLIST.get(orig._dbcp.class_name(), []):
+            if name not in HOTFIX_FIELD_BLACKLIST.get(orig.dbc_name(), []):
                 hotfix_fields |= (1 << idx)
                 hotfix.add_hotfix(orig._fi[idx], orig)
         elif 'S' not in fmt and orig._d[idx] != hotfix._d[idx]:
             # Blacklist check
-            if name not in HOTFIX_FIELD_BLACKLIST.get(orig._dbcp.class_name(), []):
+            if name not in HOTFIX_FIELD_BLACKLIST.get(orig.dbc_name(), []):
                 hotfix_fields |= (1 << idx)
                 hotfix.add_hotfix(orig._fi[idx], orig)
 
     return hotfix_fields
 
-def apply_hotfixes(opts, file_name, dbc_file, database):
-    if not opts.cache_dir:
-        return
+def apply_hotfixes(opts, cache, dbc_parser, database):
+    for record in cache.entries(dbc_parser):
+        try:
+            hotfix_data = hotfix_fields(database[record.id], record)
+            # Add some additional information for debugging purposes
+            if opts.debug and hotfix_data:
+                if database[record.id].id == record.id:
+                    logging.debug('%s REPLACE OLD: %s',
+                        dbc_parser.file_name(), database[record.id])
+                    logging.debug('%s REPLACE NEW: %s',
+                        dbc_parser.file_name(), record)
+                else:
+                    logging.debug('%s ADD: %s',
+                        dbc_parser.file_name(), record)
 
-    pattern = '%s.*' % dbc_file.class_name()
-    potential_files = []
-    # Get all cache files
-    for dirpath, dirnames, filenames in os.walk(opts.cache_dir):
-        for filename in filenames:
-            if fnmatch.fnmatch(filename, pattern):
-                potential_files.append(os.path.join(dirpath, filename))
-
-    cache_dbc_files = []
-    for potential_file in potential_files:
-        cache_dbc_file = dbc.file.DBCFile(opts, potential_file, dbc_file.parser)
-        if not cache_dbc_file.open():
-            logging.warn('Unable to open cache file %s', potential_file)
-            continue
-
-        # Sanity check table hash and layout hash against the actual client
-        # data file. They must match for the cache to be used
-        if cache_dbc_file.parser.table_hash != dbc_file.parser.table_hash or \
-            cache_dbc_file.parser.layout_hash != dbc_file.parser.layout_hash:
-            logging.debug('Table or Layout hashes do not match, table_hash: cache=%#.8x client_data=%#.8x, layout_hash: cache=%#.8x, client_data=%#.8x',
-                cache_dbc_file.parser.table_hash, dbc_file.parser.table_hash,
-                cache_dbc_file.parser.layout_hash, dbc_file.parser.layout_hash)
-            continue
-
-        # Empty cache files are kinda pointless
-        if cache_dbc_file.parser.n_records() == 0:
-            continue
-
-        cache_dbc_files.append(cache_dbc_file)
-
-    # We have a set of cache files parsed, sort them into ascending timestamp
-    # order. The timestamp in the cache file header defines the last time the
-    # cache file is written .. higher timestamps = more fresh caches.
-    cache_dbc_files.sort(key = lambda v: v.parser.timestamp)
-
-    # Then, overwrite any existing data in the parameter 'database' with the
-    # cached data. This may also include adding new data.
-    for cache_file in cache_dbc_files:
-        logging.debug('Applying hotfixes from %s', cache_file.file_name)
-        for record in cache_file:
-            try:
-                hotfix_data = hotfix_fields(database[record.id], record)
-                # Add some additional information for debugging purposes
-                if opts.debug and hotfix_data:
-                    if database[record.id].id == record.id:
-                        logging.debug('%s (%d) REPLACE OLD: %s',
-                            cache_file.file_name, cache_file.parser.timestamp, database[record.id])
-                        logging.debug('%s (%d) REPLACE NEW: %s',
-                            cache_file.file_name, cache_file.parser.timestamp, record)
-                    else:
-                        logging.debug('%s (%d) ADD: %s',
-                            cache_file.file_name, cache_file.parser.timestamp, record)
-
-                if hotfix_data:
-                    record._flags = hotfix_data
-                    database[record.id] = record
-            except Exception as e:
-                logging.error('Error while parsing %s: record=%s, error=%s',
-                    cache_file.class_name(), record, e)
-                traceback.print_exc()
-                sys.exit(1)
+            if hotfix_data:
+                record._flags = hotfix_data
+                database[record.id] = record
+        except Exception as e:
+            logging.error('Error while parsing %s: record=%s, error=%s',
+                dbc_parser.class_name(), record, e)
+            traceback.print_exc()
+            sys.exit(1)
 
 def output_hotfixes(generator, data_str, hotfix_data):
     generator._out.write('#define %s%s_HOTFIX%s_SIZE (%d)\n\n' % (
@@ -391,6 +349,10 @@ class DataGenerator(object):
             self._out.close()
 
     def initialize(self):
+        cache = dbc.file.DBCache(self._options)
+        if not cache.open():
+            return False
+
         for i in self._dbc:
             dbcf = None
             if self._data_store:
@@ -415,7 +377,8 @@ class DataGenerator(object):
                         print(dbcf, record, type(record), record._fi)
                         sys.exit(1)
 
-                apply_hotfixes(self._options, self.file_path(i), dbcf, dbase)
+                logging.debug('Hotfixing %s ...', dbcf.file_name)
+                apply_hotfixes(self._options, cache, dbcf.parser, dbase)
 
         return True
 
@@ -1242,7 +1205,7 @@ class SpellDataGenerator(DataGenerator):
          191124, 191146,
          214802, 214803,            # Momento of Angerboda trinket
          215476,                    # Obelisk of the Void trinket
-         215695,                    # Figurehead of the Naglfar trinket 
+         215695,                    # Figurehead of the Naglfar trinket
          215407,                    # Caged Horror trinket
          191545, 191548, 191549, 191550, 191551, 191552, 191553, 191554, # Darkmoon Deck: Dominion
          191603, 191604, 191605, 191606, 191607, 191608, 191609, 191610, # Darkmoon Deck: Hellfire
@@ -1265,7 +1228,9 @@ class SpellDataGenerator(DataGenerator):
          # 7.1.5 de-links Mark of the Hidden Satyr damage spell fully from the driver
          191259,
          # 7.1.5 Entwined Elemental Foci buffs
-         225729, 225730
+         225729, 225730,
+         # 7.2.0 Dreadstone of Endless Shadows stat buffs
+         238499, 238500, 238501
         ),
 
         # Warrior:
@@ -1303,7 +1268,10 @@ class SpellDataGenerator(DataGenerator):
             ( 180290, 0 ),          # ashen strike (speculative)
             ( 221883, 0 ),          # Divine Steed
             ( 228288, 0, True ),
-			( 205729, 0 ),
+            ( 205729, 0 ),
+            ( 238996, 0 ),          # Righteous Verdict
+            ( 242981, 0 ),          # Blessing of the Ashbringer
+            ( 211561, 0 ),          # Justice Gaze
         ),
 
         # Hunter:
@@ -1493,6 +1461,8 @@ class SpellDataGenerator(DataGenerator):
 		  ( 233498, 0 ),
 		  ( 233499, 0 ),
           ( 213229, 0 ),
+          ( 243050, 0 ),        # Fire Rift
+          ( 242922, 0 ),        # Jaws of Shadow
         ),
 
         # Monk:
@@ -1516,10 +1486,12 @@ class SpellDataGenerator(DataGenerator):
           ( 116768, 3 ), # Combo Breaker: Blackout Kick
           ( 121283, 0 ), # Chi Sphere from Power Strikes
           ( 228287, 3 ), # Spinning Crane Kick's Mark of the Crane debuff
+          ( 220358, 3 ), # Cyclone Strikes info; TODO: remove this line once 7.2.5 releases
           ( 125174, 3 ), # Touch of Karma redirect buff
           ( 195651, 3 ), # Crosswinds Artifact trait trigger spell
           ( 196061, 3 ), # Crosswinds Artifact trait damage spell
           ( 240672, 3 ), # Master of Combinations Artifact trait buff
+          ( 242387, 3 ), # Thunderfist Artifact trait buff
           ( 211432, 3 ), # Tier 19 4-piece DPS Buff
           # Legendary
           ( 213114, 3 ), # Hidden Master's Forbidden Touch buff
@@ -1555,7 +1527,7 @@ class SpellDataGenerator(DataGenerator):
           ( 210649, 2 ),       # Feral Instinct (Fangs of Ashamane artifact trait)
           ( 211140, 2 ),       # Feral tier19_2pc
           ( 211142, 2 ),       # Feral tier19_4pc
-          ( 213557, 2 ),       # Protection of Ashamane ICD (Fangs of Ashamane artifact trait) 
+          ( 213557, 2 ),       # Protection of Ashamane ICD (Fangs of Ashamane artifact trait)
           ( 211547, 1 ),       # Fury of Elune move spell
           ( 213771, 3 ),       # Swipe (Bear)
           ( 209406, 1 ),       # Oneth's Intuition buff

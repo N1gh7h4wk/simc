@@ -16,7 +16,7 @@ spec=vengeance
 
 # Executed before combat begins. Accepts non-harmful actions only.
 actions.precombat=flask,type=flask_of_the_seventh_demon
-actions.precombat+=/food,type=nightborne_delicacy_platter
+actions.precombat+=/food,type=lavish_suramar_feast
 actions.precombat+=/augmentation,type=defiled
 # Snapshot raid buffed stats before combat begins and pre-potting is done.
 actions.precombat+=/snapshot_stats
@@ -66,7 +66,7 @@ off_hand=aldrachi_warblades,id=128831,ilevel=870
 # Gear Summary
 # gear_ilvl=826.25
 # gear_agility=8886
-# gear_stamina=15614
+# gear_stamina=15615
 # gear_crit_rating=9783
 # gear_haste_rating=868
 # gear_mastery_rating=1810
