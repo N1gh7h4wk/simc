@@ -709,7 +709,7 @@ struct mage_pet_spell_t : public spell_t
 
   virtual void schedule_execute( action_state_t* execute_state ) override
   {
-    target = o()->current_target;
+    set_target( o() -> current_target );
 
     spell_t::schedule_execute( execute_state );
   }
@@ -734,7 +734,7 @@ struct mage_pet_melee_attack_t : public melee_attack_t
 
   virtual void schedule_execute( action_state_t* execute_state ) override
   {
-    target = o()->current_target;
+    set_target( o() -> current_target );
 
     melee_attack_t::schedule_execute( execute_state );
   }
@@ -1212,6 +1212,8 @@ struct fireball_t : public mirror_image_spell_t
     : mirror_image_spell_t( "fireball", p, p->find_pet_spell( "Fireball" ) )
   {
     parse_options( options_str );
+    // PTR Multiplier
+    base_multiplier *= 1.0 + p -> find_spell( 137019 ) -> effectN( 1 ).percent();
   }
 };
 
@@ -1555,7 +1557,7 @@ struct cinder_impact_event_t : public event_t
 
   void execute() override
   {
-    cinder -> target = target;
+    cinder -> set_target( target );
     cinder -> execute();
   }
 };
@@ -2714,6 +2716,8 @@ struct conflagration_dot_t : public fire_mage_spell_t
     background = true;
     base_costs[ RESOURCE_MANA ] = 0;
     trigger_gcd = timespan_t::zero();
+    // PTR Multiplier
+    base_multiplier *= 1.0 + p -> find_spell( 137019 ) -> effectN( 1 ).percent();
   }
   void init() override
   {
@@ -2734,6 +2738,8 @@ struct conflagration_t : public fire_mage_spell_t
     aoe = -1;
     base_costs[ RESOURCE_MANA ] = 0;
     trigger_gcd = timespan_t::zero();
+    // PTR Multiplier
+    base_multiplier *= 1.0 + p -> find_spell( 137019 ) -> effectN( 1 ).percent();
   }
 };
 
@@ -2753,6 +2759,8 @@ struct phoenix_reborn_t : public fire_mage_spell_t
     background = true;
     icd = p -> get_cooldown( "phoenix_reborn_icd" );
     icd -> duration = p -> find_spell( 215773 ) -> internal_cooldown();
+    // PTR Multiplier
+    base_multiplier *= 1.0 + p -> find_spell( 137019 ) -> effectN( 1 ).percent();
   }
   virtual void execute() override
   {
@@ -2799,7 +2807,7 @@ struct ignite_t : public residual_action_t
     if ( p() -> talents.conflagration -> ok() &&
          rng().roll( p() -> talents.conflagration -> effectN( 1 ).percent() ) )
     {
-      conflagration -> target = dot -> target;
+      conflagration -> set_target( dot -> target );
       conflagration -> execute();
     }
 
@@ -2807,7 +2815,7 @@ struct ignite_t : public residual_action_t
          rng().roll( p() -> artifact.phoenix_reborn.data().proc_chance() )
          && phoenix_reborn -> icd -> up() )
     {
-      phoenix_reborn -> target = dot -> target;
+      phoenix_reborn -> set_target( dot -> target );
       phoenix_reborn -> execute();
     }
   }
@@ -2875,6 +2883,7 @@ struct arcane_barrage_t : public arcane_mage_spell_t
     base_aoe_multiplier *= data().effectN( 2 ).percent();
     base_multiplier *= 1.0 + p -> artifact.torrential_barrage.percent();
     cooldown -> hasted = true;
+    add_child( arcane_rebound );
   }
 
   virtual void execute() override
@@ -2902,7 +2911,7 @@ struct arcane_barrage_t : public arcane_mage_spell_t
 
     if ( p() -> artifact.arcane_rebound.rank() && ( s -> n_targets > 2 ) && ( s -> chain_target == 0 ) )
     {
-      arcane_rebound -> target = s -> target;
+      arcane_rebound -> set_target( s -> target );
       arcane_rebound -> execute();
     }
   }
@@ -3128,6 +3137,7 @@ struct time_and_space_t : public arcane_mage_spell_t
   time_and_space_t( mage_t* p ) :
     arcane_mage_spell_t( "arcane_explosion_echo", p, p -> find_spell( 240689 ) )
   {
+    triggers_arcane_missiles = true;
     aoe = -1;
     trigger_gcd = timespan_t::zero();
     background = true;
@@ -3144,6 +3154,17 @@ struct time_and_space_t : public arcane_mage_spell_t
     am *= arcane_charge_damage_bonus( false );
 
     return am;
+  }
+
+  virtual void execute() override
+  {
+    arcane_mage_spell_t::execute();
+
+    if ( p() -> bugs )
+    {
+      // AM needs to be triggered manually because TnS is background.
+      trigger_am( am_trigger_source_id );
+    }
   }
 };
 
@@ -3189,7 +3210,7 @@ struct arcane_explosion_t : public arcane_mage_spell_t
     {
       if ( p() -> buffs.time_and_space -> check() )
       {
-        arcane_explosion_echo -> target = execute_state -> target;
+        arcane_explosion_echo -> set_target( execute_state -> target );
         arcane_explosion_echo -> execute();
         p() -> buffs.time_and_space -> trigger();
       }
@@ -3543,15 +3564,17 @@ struct arcane_power_t : public arcane_mage_spell_t
 };
 
 // Blast Furance Spell =======================================================
-struct blast_furance_t : public fire_mage_spell_t
+struct blast_furnace_t : public fire_mage_spell_t
 {
-  blast_furance_t( mage_t* p, const std::string& options_str ) :
-    fire_mage_spell_t( "blast_furance", p, p -> find_spell( 194522 ) )
+  blast_furnace_t( mage_t* p, const std::string& options_str ) :
+    fire_mage_spell_t( "blast_furnace", p, p -> find_spell( 194522 ) )
   {
     parse_options( options_str );
     background = true;
     callbacks = false;
     hasted_ticks = false;
+    // PTR Multiplier
+    base_multiplier *= 1.0 + p -> find_spell( 137019 ) -> effectN( 1 ).percent();
   }
 };
 // Blast Wave Spell ==========================================================
@@ -4103,7 +4126,7 @@ struct evocation_t : public arcane_mage_spell_t
     {
       double explosion_amount = mana_gained *
                                 p() -> artifact.aegwynns_ascendance.percent();
-      aegwynns_ascendance -> target = d -> target;
+      aegwynns_ascendance -> set_target( d -> target );
       aegwynns_ascendance -> base_dd_max = explosion_amount;
       aegwynns_ascendance -> base_dd_min = explosion_amount;
       aegwynns_ascendance -> execute();
@@ -4129,6 +4152,7 @@ struct fireball_t : public fire_mage_spell_t
     // PTR Multiplier
     base_multiplier *= 1.0 + p -> find_spell( 137019 ) -> effectN( 1 ).percent();
     base_execute_time *= 1.0 + p -> artifact.fire_at_will.percent();
+    add_child( conflagration_dot );
   }
 
   virtual timespan_t travel_time() const override
@@ -4170,7 +4194,7 @@ struct fireball_t : public fire_mage_spell_t
       }
       if ( p() -> talents.conflagration -> ok() )
       {
-        conflagration_dot -> target = s -> target;
+        conflagration_dot -> set_target ( s -> target );
         conflagration_dot -> execute();
       }
     }
@@ -4253,6 +4277,9 @@ struct aftershocks_t : public fire_mage_spell_t
     background = true;
     aoe = -1;
     triggers_ignite = true;
+    base_multiplier *= 1.0 + p -> artifact.blue_flame_special.percent();
+    // PTR Multiplier
+    base_multiplier *= 1.0 + p -> find_spell( 137019 ) -> effectN( 1 ).percent();
   }
 };
 
@@ -4274,6 +4301,7 @@ struct flamestrike_t : public fire_mage_spell_t
     // PTR Multiplier
     base_multiplier *= 1.0 + p -> find_spell( 137019 ) -> effectN( 1 ).percent();
     aoe = -1;
+    add_child( flame_patch );
 
     if ( p -> artifact.aftershocks.rank() )
     {
@@ -4324,7 +4352,7 @@ struct flamestrike_t : public fire_mage_spell_t
         .target( execute_state -> target )
         .duration( timespan_t::from_seconds( 8.0 ) )
         .action( flame_patch )
-        .hasted( ground_aoe_params_t::SPELL_SPEED ), true );
+        .hasted( ground_aoe_params_t::SPELL_SPEED ) );
     }
   }
 
@@ -4521,7 +4549,7 @@ struct flurry_t : public frost_mage_spell_t
   void tick( dot_t* d ) override
   {
     frost_mage_spell_t::tick( d );
-    flurry_bolt -> target = d -> target;
+    flurry_bolt -> set_target( d -> target );
     flurry_bolt -> execute();
   }
 };
@@ -4555,6 +4583,7 @@ struct frost_bomb_t : public frost_mage_spell_t
     frost_mage_spell_t( "frost_bomb", p, p -> talents.frost_bomb )
   {
     parse_options( options_str );
+    stats -> add_child( p -> get_stats( "frost_bomb_explosion" ) );
   }
 
   virtual void execute() override
@@ -4775,6 +4804,12 @@ struct ice_time_nova_t : public frost_mage_spell_t
   virtual void impact( action_state_t* s ) override
   {
     frost_mage_spell_t::impact( s );
+
+    if ( p() -> bugs )
+    {
+      p() -> buffs.sephuzs_secret -> trigger();
+    }
+
     p() -> apply_crowd_control( s, MECHANIC_ROOT );
   }
 };
@@ -5128,7 +5163,7 @@ struct ice_lance_t : public frost_mage_spell_t
     if ( result_is_hit( s -> result ) && fss -> frozen() &&
          td( s -> target ) -> debuffs.frost_bomb -> check() )
     {
-      frost_bomb_explosion -> target = s -> target;
+      frost_bomb_explosion -> set_target( s -> target );
       frost_bomb_explosion -> execute();
     }
   }
@@ -5216,6 +5251,9 @@ struct icy_veins_t : public frost_mage_spell_t
     p() -> buffs.icy_veins -> trigger();
     if ( p() -> legendary.lady_vashjs_grasp )
     {
+      // Refreshing infinite ticking buff doesn't quite work, remove
+      // LVG manually and then trigger it again.
+      p() -> buffs.lady_vashjs_grasp -> expire();
       p() -> buffs.lady_vashjs_grasp -> trigger();
       // Trigger 1 stack of FoF when IV is triggered with LVG legendary,
       // This is independant of the tick action gains.
@@ -5235,7 +5273,7 @@ struct fire_blast_t : public fire_mage_spell_t
   double pyrosurge_chance;
   pyrosurge_flamestrike_t* pyrosurge_flamestrike;
   cooldown_t* icd;
-  blast_furance_t* blast_furnace;
+  blast_furnace_t* blast_furnace;
 
   fire_blast_t( mage_t* p, const std::string& options_str ) :
     fire_mage_spell_t( "fire_blast", p,
@@ -5281,7 +5319,8 @@ struct fire_blast_t : public fire_mage_spell_t
 
     if ( p -> artifact.blast_furnace.rank() )
     {
-      blast_furnace = new blast_furance_t( p, options_str );
+      blast_furnace = new blast_furnace_t( p, options_str );
+      add_child( blast_furnace );
     }
 
     base_crit += p -> spec.fire_blast_2 -> effectN( 1 ).percent();
@@ -5314,7 +5353,7 @@ struct fire_blast_t : public fire_mage_spell_t
       if ( p() -> rng().roll( pyrosurge_chance ) )
       {
 
-        pyrosurge_flamestrike -> target = s -> target;
+        pyrosurge_flamestrike -> set_target( s -> target );
         pyrosurge_flamestrike -> execute();
       }
 
@@ -5327,7 +5366,7 @@ struct fire_blast_t : public fire_mage_spell_t
 
       if ( p() -> artifact.blast_furnace.rank() )
       {
-        blast_furnace -> target = s -> target;
+        blast_furnace -> set_target( s -> target );
         blast_furnace -> execute();
       }
     }
@@ -5395,7 +5434,7 @@ void living_bomb_explosion_t::impact( action_state_t* s )
         child_lb -> name(), s -> target -> name() );
     }
 
-    child_lb -> target = s -> target;
+    child_lb -> set_target( s -> target );
     child_lb -> base_costs[ RESOURCE_MANA ] = 0;
     child_lb -> execute();
   }
@@ -5420,6 +5459,7 @@ living_bomb_t::living_bomb_t( mage_t* p, const std::string& options_str,
 
   cooldown -> hasted = true;
   hasted_ticks       = true;
+  add_child( explosion );
 }
 
 timespan_t living_bomb_t::composite_dot_duration( const action_state_t* s ) const
@@ -5432,7 +5472,7 @@ void living_bomb_t::last_tick( dot_t* d )
 {
   fire_mage_spell_t::last_tick( d );
 
-  explosion -> target = d -> target;
+  explosion -> set_target( d -> target );
   explosion -> execute();
 }
 
@@ -5512,6 +5552,7 @@ struct mark_of_aluneth_t : public arcane_mage_spell_t
     triggers_arcane_missiles = false;
     spell_power_mod.tick = p -> find_spell( 211088 ) -> effectN( 1 ).sp_coeff();
     hasted_ticks = false;
+    add_child( mark_explosion );
   }
   virtual void execute() override
   {
@@ -5544,7 +5585,7 @@ struct mark_of_aluneth_t : public arcane_mage_spell_t
   {
     arcane_mage_spell_t::last_tick( d );
 
-    mark_explosion -> target = d -> target;
+    mark_explosion -> set_target( d -> target );
     mark_explosion -> execute();
   }
 };
@@ -5651,7 +5692,7 @@ struct meteor_t : public fire_mage_spell_t
     base_tick_time = timespan_t::from_seconds( 2 );
 
     fire_mage_spell_t::impact( s );
-    meteor_impact -> target = s -> target;
+    meteor_impact -> set_target( s -> target );
     meteor_impact -> execute();
     base_tick_time = actual_tick_time;
   }
@@ -5659,7 +5700,7 @@ struct meteor_t : public fire_mage_spell_t
   void tick( dot_t* d ) override
   {
     fire_mage_spell_t::tick( d );
-    meteor_burn -> target = d -> target;
+    meteor_burn -> set_target( d -> target );
     meteor_burn -> execute();
   }
 };
@@ -5835,8 +5876,6 @@ struct phoenixs_flames_splash_t : public fire_mage_spell_t
   virtual void impact( action_state_t* s ) override
   {
     // PF cleave does not impact main target
-    // TODO: Target with chain_target == 0 will always be the same enemy,
-    // no matter what the original PF/PF_chain target was.
     if ( s -> chain_target == 0 )
     {
       return;
@@ -5849,7 +5888,7 @@ struct phoenixs_flames_splash_t : public fire_mage_spell_t
   {
     double am = fire_mage_spell_t::action_multiplier();
 
-    am *= std::pow( strafing_run_multiplier, chain_number );
+    am *= std::pow( strafing_run_multiplier, p() -> bugs ? chain_number + 1 : chain_number );
 
     return am;
   }
@@ -5893,7 +5932,7 @@ struct strafing_run_t : public fire_mage_spell_t
     if ( result_is_hit( s -> result ) )
     {
       phoenixs_flames_splash -> chain_number = chain_number;
-      phoenixs_flames_splash -> target = s -> target;
+      phoenixs_flames_splash -> set_target( s -> target );
       phoenixs_flames_splash -> execute();
     }
   }
@@ -5962,7 +6001,7 @@ struct phoenixs_flames_t : public fire_mage_spell_t
     if ( p() -> artifact.strafing_run.rank() && s -> chain_target > 0 )
     {
       strafing_run_chain -> chain_number = s -> chain_target;
-      strafing_run_chain -> target = s -> target;
+      strafing_run_chain -> set_target( s -> target );
       strafing_run_chain -> execute();
       return;
     }
@@ -5972,7 +6011,7 @@ struct phoenixs_flames_t : public fire_mage_spell_t
     if ( result_is_hit( s -> result ) )
     {
       phoenixs_flames_splash -> chain_number = s -> chain_target;
-      phoenixs_flames_splash -> target = s -> target;
+      phoenixs_flames_splash -> set_target( s -> target );
       phoenixs_flames_splash -> execute();
     }
   }
@@ -7068,7 +7107,7 @@ void mage_spell_t::trigger_unstable_magic( action_state_t* s )
 
   if ( p() -> rng().roll( um_proc_rate ) )
   {
-    p() -> unstable_magic_explosion -> target = s -> target;
+    p() -> unstable_magic_explosion -> set_target( s -> target );
     p() -> unstable_magic_explosion -> base_dd_max = s -> result_amount;
     p() -> unstable_magic_explosion -> base_dd_min = s -> result_amount;
     p() -> unstable_magic_explosion -> execute();
@@ -7118,7 +7157,7 @@ struct freeze_t : public action_t
   {
     assert( action );
 
-    action -> target = target;
+    action -> set_target( target );
     action -> execute();
   }
 
@@ -7603,7 +7642,7 @@ mage_t::~mage_t()
 void mage_t::trigger_touch_of_the_magi( buffs::touch_of_the_magi_t* buff )
 {
 
-  touch_of_the_magi_explosion -> target = buff -> player;
+  touch_of_the_magi_explosion -> set_target( buff -> player );
   touch_of_the_magi_explosion -> base_dd_max = buff -> accumulated_damage;
   touch_of_the_magi_explosion -> base_dd_min = buff -> accumulated_damage;
   touch_of_the_magi_explosion -> execute();
@@ -8636,7 +8675,7 @@ void mage_t::apl_fire()
   default_list -> add_action( mage_t::get_special_use_items( "pharameres_forbidden_grimoire", false ) );
   default_list -> add_action( mage_t::get_special_use_items( "kiljaedens_burning_wish", false ) );
 
-  default_list -> add_action( "call_action_list,name=combustion_phase,if=cooldown.combustion.remains<=action.rune_of_power.cast_time+(!talent.kindling.enabled*gcd)|buff.combustion.up" );
+  default_list -> add_action( "call_action_list,name=combustion_phase,if=cooldown.combustion.remains<=action.rune_of_power.cast_time+(!talent.kindling.enabled*gcd)&(!talent.firestarter.enabled|target.health.pct<90|active_enemies>=4|active_enemies>=2&talent.flame_patch.enabled)|buff.combustion.up" );
   default_list -> add_action( "call_action_list,name=rop_phase,if=buff.rune_of_power.up&buff.combustion.down" );
   default_list -> add_action( "call_action_list,name=standard_rotation" );
 
