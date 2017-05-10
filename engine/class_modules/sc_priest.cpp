@@ -103,7 +103,7 @@ public:
     propagate_const<buff_t*> reperation;               // T18 Disc 2p
     propagate_const<buff_t*> premonition;              // T18 Shadow 4pc
     propagate_const<stat_buff_t*> power_overwhelming;  // T19OH
-    propagate_const<buff_t*> shadow_t19_4p;            // T19 Shadow 4pc
+    propagate_const<buff_t*> void_vb;            // T19 Shadow 4pc
     propagate_const<buff_t*> empty_mind;            // T20 Shadow 2pc
 
     // Legion Legendaries
@@ -609,9 +609,9 @@ public:
         return 0;
       }
 
-      double drain_multiplier = actor.sets->has_set_bonus(PRIEST_SHADOW, T20, B4)
-                              ? 0.75
-                              : 1.0;
+      double drain_multiplier = 1.0 
+                              - ( actor.sets->has_set_bonus(PRIEST_SHADOW, T20, B4)
+                                * actor.sets->set( PRIEST_SHADOW, T20, B4 )->effectN( 1 ).percent() );
 
       return drain_multiplier * (     base_drain_per_sec 
                                   + ( actor.buffs.insanity_drain_stacks->current_value - 1 ) 
@@ -3207,7 +3207,7 @@ struct void_bolt_t final : public priest_spell_t
 
     priest.generate_insanity( insanity_gain, priest.gains.insanity_void_bolt, execute_state->action );
 
-    if ( priest.buffs.shadow_t19_4p->up() )
+    if ( priest.buffs.void_vb->up() )
     {
       cooldown->reset( false );
     }
@@ -3330,7 +3330,7 @@ struct void_eruption_t final : public priest_spell_t
 
     if ( priest.sets->has_set_bonus( PRIEST_SHADOW, T19, B4 ) )
     {
-      priest.buffs.shadow_t19_4p->trigger();
+      priest.buffs.void_vb->trigger();
     }
     else
     {
@@ -4169,12 +4169,7 @@ expr_t* priest_t::create_expression( action_t* a, const std::string& name_str )
     // Does not account for a new stack occurring in the middle and can be anywhere from 0.0 - 0.5 off the real value.
     // Does not account for Dispersion or Void Torrent
     return make_fn_expr( name_str, [this]() {
-      if ( !buffs.voidform->check() )
-        return 0.0;
-
-      return ( ( buffs.voidform->data().effectN( 2 ).base_value() / -500.0 ) +
-               ( ( buffs.insanity_drain_stacks->check() - 1 ) * 2.0 / 3.0 ) );
-      // hardcoded patch 7.1.5 2016-12-17
+      return ( insanity.insanity_drain_per_second() );
     } );
   }
 
@@ -4797,11 +4792,10 @@ void priest_t::create_buffs()
       stat_buff_creator_t( this, "power_overwhelming", sets->set( specialization(), T19OH, B8 )->effectN( 1 ).trigger() )
           .trigger_spell( sets->set( specialization(), T19OH, B8 ) );
 
-  buffs.shadow_t19_4p = buff_creator_t( this, "shadow_t19_4p",
-                                        find_spell( 211654 ) )
-                            .chance( 1.0 )
-                            .duration( dbc.ptr ? timespan_t::from_seconds( 2.5 ) : timespan_t::from_seconds(4));  // TODO Update with spelldata once available
-
+  buffs.void_vb = buff_creator_t( this, "void",
+                                        find_spell( 211657 ) )
+                            .chance( 1.0 );
+                            
   buffs.empty_mind = buff_creator_t( this, "empty_mind", find_spell( 247226 ) )
                           .chance( sets->has_set_bonus( PRIEST_SHADOW, T20, B2 ) )
                           .max_stack( 10 );   // TODO Update from spelldata
@@ -5074,11 +5068,11 @@ void priest_t::apl_shadow()
       "variable,op=set,name=actors_fight_time_mod,value=((450-(time+target."
       "time_to_die))%5),if=time+target.time_to_die<=450" );
   check->add_action(
-      "variable,op=set,name=s2mcheck,value=(0.8*(83-(5*talent.sanlayn.enabled)"
-      "+(33*talent.reaper_of_souls.enabled)+set_bonus.tier19_2pc*4+8*equipped"
-      ".mangazas_madness+((raw_haste_pct*10))*"
-      "(2+(0.8*set_bonus.tier19_2pc)+(1*talent.reaper_of_souls.enabled)+"
-      "(2*artifact.mass_hysteria.rank)-(1*talent.sanlayn.enabled))))-("
+      "variable,op=set,name=s2mcheck,value=(0.8*(83+40*set_bonus.tier20_4pc-"
+      "(5*talent.sanlayn.enabled)+(33*talent.reaper_of_souls.enabled)+set_bonus"
+      ".tier19_2pc*4+8*equipped.mangazas_madness+(raw_haste_pct*10*(1+0.7*set_"
+      "bonus.tier20_4pc))*(2+(0.8*set_bonus.tier19_2pc)+(1*talent.reaper_of_souls"
+      ".enabled)+(2*artifact.mass_hysteria.rank)-(1*talent.sanlayn.enabled))))-("
       "variable.actors_fight_time_mod*nonexecute_actors_pct)" );
   check->add_action( "variable,op=min,name=s2mcheck,value=180" );
 
@@ -5151,7 +5145,8 @@ void priest_t::apl_shadow()
     s2m->add_action( "arcane_torrent,if=buff.insanity_drain_stacks.value>=65"
                      "&(insanity-(current_insanity_drain*gcd.max)+30)<100" );  
   s2m->add_action(
-      "power_infusion,if=cooldown.shadow_word_death.charges=0&buff.voidform.stack>45" );
+      "power_infusion,if=cooldown.shadow_word_death.charges=0&buff.voidform.stack"
+       ">(45+35*set_bonus.tier20_4pc)" );
   s2m->add_action( "void_bolt" );
   s2m->add_action(
       "shadow_word_death,if=(active_enemies<=4|(talent.reaper_of_souls.enabled&"
@@ -5173,7 +5168,7 @@ void priest_t::apl_shadow()
   s2m->add_action(
       "shadow_word_death,if=(active_enemies<=4|(talent.reaper_of_souls.enabled&"
       "active_enemies<=2))&cooldown.shadow_word_death.charges=2" );
-  s2m->add_action( "shadowfiend,if=!talent.mindbender.enabled,if=buff.voidform.stack>15" );
+  s2m->add_action( "shadowfiend,if=!talent.mindbender.enabled&buff.voidform.stack>15" );
   s2m->add_action(
       "shadow_word_void,if=talent.shadow_word_void.enabled&(insanity-(current_"
       "insanity_drain*gcd.max)+50)<100" );
@@ -5243,7 +5238,7 @@ if ( race == RACE_BLOOD_ELF )
       ">5.5&(!talent.surrender_to_madness.enabled|(talent.surrender_to_madness."
       "enabled&target.time_to_die>variable.s2mcheck-(buff.insanity_drain_"
       "stacks."
-      "stack)+60))" );
+      "value)+60))" );
   vf->add_action(
       "mindbender,if=talent.mindbender.enabled&(!talent.surrender_to_madness."
       "enabled"
@@ -5252,12 +5247,10 @@ if ( race == RACE_BLOOD_ELF )
       "(buff.insanity_drain_stacks.value)+30))" );
   vf->add_action(
       "power_infusion,if=buff.insanity_drain_stacks.value>=(10+2*set_bonus."
-      "tier19_2pc+"
-      "5*buff.bloodlust.up+5*equipped.mangazas_madness)&(!talent.surrender_to_"
-      "madness.enabled"
-      "|(talent.surrender_to_madness.enabled&target.time_to_die>variable."
-      "s2mcheck-(buff."
-      "insanity_drain_stacks.value)+61))" );
+      "tier19_2pc+5*buff.bloodlust.up*(1+0.5*set_bonus.tier20_4pc)+3*equipped"
+      ".mangazas_madness+3*set_bonus.tier20_4pc)&(!talent.surrender_to_madness."
+      "enabled|(talent.surrender_to_madness.enabled&target.time_to_die>variable."
+      "s2mcheck-(buff.insanity_drain_stacks.value)+61))" );
   vf->add_action(
       "berserking,if=buff.voidform.stack>=10&buff.insanity_drain_stacks.value<="
       "20&"
@@ -5283,8 +5276,7 @@ if ( race == RACE_BLOOD_ELF )
       "shadow_word_death,if=(active_enemies<=4|(talent.reaper_of_souls"
       ".enabled&active_enemies<=2))&cooldown.shadow_word_death.charges=2" );
   vf->add_action( 
-      "shadowfiend,if=!talent.mindbender.enabled,if=buff.voidform.stack>15"
-      "|set_bonus.tier20_4pc");
+      "shadowfiend,if=!talent.mindbender.enabled,if=buff.voidform.stack>15" );
   vf->add_action(
       "shadow_word_void,if=talent.shadow_word_void.enabled&(insanity-(current_"
       "insanity_drain*gcd.max)+25)<100" );
