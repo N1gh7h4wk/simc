@@ -107,6 +107,8 @@ namespace item
   void infernal_cinders( special_effect_t&             );
   void vial_of_ceaseless_toxins( special_effect_t&     );
   void tarnished_sentinel_medallion( special_effect_t& );
+  void umbral_moonglaives( special_effect_t&           );
+  void engine_of_eradication( special_effect_t&        );
 
   // 7.2.0 Dungeon
   void dreadstone_of_endless_shadows( special_effect_t& );
@@ -1022,7 +1024,6 @@ void item::mrrgrias_favor( special_effect_t& effect )
 
 // Tarnished Sentinel Medallion ================================================================
 
-
 void item::tarnished_sentinel_medallion( special_effect_t& effect )
 {
   // Blast is the proc'd damage
@@ -1127,6 +1128,100 @@ void item::tarnished_sentinel_medallion( special_effect_t& effect )
   effect.execute_action = create_proc_action<spectral_owl_bolt_t>( effect, proc );
 }
 
+// Umbral Moonglaives ======================================================
+
+struct umbral_glaive_storm_t : public proc_spell_t
+{
+  umbral_glaive_storm_t( const special_effect_t& effect ) :
+    proc_spell_t( "umbral_glaive_storm", effect.player, effect.player -> find_spell( 242556 ), effect.item )
+  { }
+};
+
+struct shattering_umbral_glaives_t : public proc_spell_t
+{
+  shattering_umbral_glaives_t( const special_effect_t& effect ) :
+    proc_spell_t( "shattering_umbral_glaives", effect.player, effect.player -> find_spell( 242557 ), effect.item )
+  { }
+};
+
+struct umbral_glaives_driver_t : public proc_spell_t
+{
+  action_t* storm;
+  action_t* shatter;
+
+  umbral_glaives_driver_t( const special_effect_t& effect ) :
+    proc_spell_t( "umbral_glaives_driver", effect.player, effect.driver(), effect.item )
+  {
+    quiet = true;
+
+    storm = create_proc_action<umbral_glaive_storm_t>( effect );
+
+    shatter = effect.player -> find_action( "shattering_umbral_glaives" );
+    if ( shatter == nullptr )
+    {
+      shatter = new shattering_umbral_glaives_t( effect );
+    }
+
+    storm -> add_child( shatter );
+  }
+
+  void execute() override
+  {
+    proc_spell_t::execute();
+
+    make_event<ground_aoe_event_t>( *sim, player, ground_aoe_params_t()
+      .target( execute_state -> target )
+      .pulse_time( data().effectN( 2 ).period() )
+      .duration( data().duration() )
+      .action( storm )
+      .expiration_callback( [ this ]() {
+        shatter -> set_target( storm -> target );
+        // Need to copy coordinates from the ground aoe event's last execute
+        auto state = shatter -> get_state();
+        shatter -> snapshot_state( state, shatter -> amount_type( state ) );
+
+        state -> original_x = storm -> execute_state -> original_x;
+        state -> original_y = storm -> execute_state -> original_y;
+
+        shatter -> schedule_execute( state );
+      } ) );
+  }
+};
+
+void item::umbral_moonglaives( special_effect_t& effect )
+{
+  effect.execute_action = create_proc_action<umbral_glaives_driver_t>( effect );
+}
+
+// Engine of Eradication ===================================================
+
+void item::engine_of_eradication( special_effect_t& effect )
+{
+  auto primary_stat = effect.player -> primary_stat();
+  if ( primary_stat == STAT_NONE )
+  {
+    effect.player -> sim -> errorf( "%s no primary stat defined for specialization, cannot initialize %s",
+        effect.player -> name(), effect.name().c_str() );
+    effect.type = SPECIAL_EFFECT_NONE;
+    return;
+  }
+
+  double amount = effect.trigger() -> effectN( 3 ).average( effect.item );
+  stat_buff_t* buff = debug_cast<stat_buff_t*>( buff_t::find( effect.player, "demonic_vigor" ) );
+  if ( buff == nullptr )
+  {
+    auto extra_seconds = timespan_t::from_seconds( effect.driver() -> effectN( 1 ).base_value() );
+    extra_seconds *= effect.player -> sim -> expansion_opts.engine_of_eradication_orbs;
+
+    buff = stat_buff_creator_t( effect.player, "demonic_vigor", effect.trigger(), effect.item )
+           .add_stat( primary_stat, amount )
+           .duration( effect.trigger() -> duration() + extra_seconds );
+  }
+
+  effect.custom_buff = buff;
+
+  new dbc_proc_callback_t( effect.item, effect );
+}
 
 // Toe Knee's Promise ======================================================
 
@@ -1654,7 +1749,9 @@ struct insidious_corruption_t : public proc_spell_t
 
   insidious_corruption_t( const special_effect_t& effect, stat_buff_t* b ) :
     proc_spell_t( effect ), buff( b )
-  { }
+  {
+    may_crit = tick_may_crit = false;
+  }
 
   void last_tick( dot_t* d ) override
   {
@@ -4922,6 +5019,8 @@ void unique_gear::register_special_effects_x7()
   register_special_effect( 242215, item::infernal_cinders          );
   register_special_effect( 242497, item::vial_of_ceaseless_toxins  );
   register_special_effect( 242570, item::tarnished_sentinel_medallion );
+  register_special_effect( 242553, item::umbral_moonglaives        );
+  register_special_effect( 242611, item::engine_of_eradication     );
 
   /* Legion 7.2.0 Dungeon */
   register_special_effect( 238498, item::dreadstone_of_endless_shadows );

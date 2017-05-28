@@ -677,8 +677,9 @@ public:
   void      create_pets() override;
   expr_t* create_expression( action_t*, const std::string& name ) override;
   resource_e primary_resource() const override { return RESOURCE_MANA; }
-  role_e primary_role() const override;
-  stat_e convert_hybrid_stat( stat_e s ) const override;
+  role_e    primary_role() const override;
+  stat_e    primary_stat() const override;
+  stat_e    convert_hybrid_stat( stat_e s ) const override;
   void      arise() override;
   void      reset() override;
   void      merge( player_t& other ) override;
@@ -1439,14 +1440,6 @@ public:
     double base_chance = p() -> spec.stormbringer -> proc_chance() +
            p() -> cache.mastery() * p() -> mastery.enhanced_elements -> effectN( 3 ).mastery_value();
 
-    if ( maybe_ptr( p() -> dbc.ptr ) )
-    {
-      if ( p() -> sets -> has_set_bonus( SHAMAN_ENHANCEMENT, T19, B4 ) )
-      {
-        base_chance = base_chance + p() -> sets -> set ( SHAMAN_ENHANCEMENT, T19, B4 ) -> effectN( 1 ).percent(); 
-      }
-    }
-
     return base_chance;
   }
 };
@@ -1642,15 +1635,12 @@ struct shaman_spell_t : public shaman_spell_base_t<spell_t>
 
   virtual double stormbringer_proc_chance() const
   {
-    double base_chance = p() -> spec.stormbringer -> proc_chance() +
-           p() -> cache.mastery() * p() -> mastery.enhanced_elements -> effectN( 3 ).mastery_value();
+    double base_chance = 0; 
 
     if ( maybe_ptr( p() -> dbc.ptr ) )
     {
-      if ( p() -> sets -> has_set_bonus( SHAMAN_ENHANCEMENT, T19, B4 ) )
-      {
-        base_chance = base_chance + p() -> sets -> set ( SHAMAN_ENHANCEMENT, T19, B4 ) -> effectN( 1 ).percent(); 
-      }
+      base_chance += p() -> spec.stormbringer -> proc_chance() +
+           p() -> cache.mastery() * p() -> mastery.enhanced_elements -> effectN( 3 ).mastery_value();
     }
 
     return base_chance;
@@ -3342,7 +3332,11 @@ struct lava_lash_t : public shaman_attack_t
   { 
     if ( maybe_ptr( p() -> dbc.ptr ) )
     {
-      return p() -> spec.stormbringer -> proc_chance();
+      auto proc_chance = shaman_attack_t::stormbringer_proc_chance();
+
+      proc_chance += p() -> sets -> set( SHAMAN_ENHANCEMENT, T19, B4 ) -> proc_chance();
+
+      return proc_chance;
     }
     
     return p() -> sets -> set( SHAMAN_ENHANCEMENT, T19, B4 ) -> proc_chance();
@@ -3635,14 +3629,13 @@ struct windstrike_t : public stormstrike_base_t
     return stormstrike_base_t::ready();
   }
 
-  //Windstrike currently does not proc unleash doom - comment all this out if it gets fixed on PTR.
-  //void execute() override
-  //{
-  //  // Proc unleash doom before the actual damage strikes, they already benefit from the buff
-  //  p() -> buff.unleash_doom -> trigger();
+  void execute() override
+  {
+    // Proc unleash doom before the actual damage strikes, they already benefit from the buff
+    p() -> buff.unleash_doom -> trigger();
 
-  //  stormstrike_base_t::execute();
-  //}
+    stormstrike_base_t::execute();
+  }
 };
 
 // Sundering Spell =========================================================
@@ -3714,7 +3707,14 @@ struct rockbiter_t : public shaman_spell_t
     if ( rng().roll(primal_ascendants_stormcallers_chance) )
     {
       // Stormcallers of the Ascendant spell ID: 248111
-      p() -> buff.ascendance -> trigger( 1, buff_t::DEFAULT_VALUE(), 1.0, p() -> find_spell( 248111 ) -> effectN( 1 ).time_value() );
+      if ( p() -> buff.ascendance -> up() )
+      {
+        p() -> buff.ascendance -> extend_duration( p(), p() -> find_spell( 248111 ) -> effectN( 1 ).time_value());
+      }
+      else
+      {
+        p() -> buff.ascendance -> trigger( 1, buff_t::DEFAULT_VALUE(), 1.0, p() -> find_spell( 248111 ) -> effectN( 1 ).time_value() );
+      }
     }
 
   }
@@ -5229,7 +5229,14 @@ struct earthquake_t : public shaman_spell_t
     if ( rng().roll( smoldering_heart_chance ) )
     {
       // Smoldering Heart spell ID: 248029
-      p() -> buff.ascendance -> trigger( 1, buff_t::DEFAULT_VALUE(), 1.0, p() -> find_spell( 248029 ) -> effectN( 1 ).time_value() );
+      if ( p() -> buff.ascendance -> up() )
+      {
+        p() -> buff.ascendance -> extend_duration( p(), p() -> find_spell( 248029 ) -> effectN( 1 ).time_value());
+      }
+      else
+      {
+        p() -> buff.ascendance -> trigger( 1, buff_t::DEFAULT_VALUE(), 1.0, p() -> find_spell( 248029 ) -> effectN( 1 ).time_value() );
+      }
     }
   }
 };
@@ -5301,10 +5308,18 @@ struct earth_shock_t : public shaman_spell_t
       p() -> resource_gain( RESOURCE_MAELSTROM, last_resource_cost, p() -> gain.the_deceivers_blood_pact, this );
     }
 
-    if ( rng().roll( smoldering_heart_chance ) )
+    if ( rng().roll( smoldering_heart_chance * last_resource_cost ) )
     {
       // Smoldering Heart spell ID: 248029
-      p() -> buff.ascendance -> trigger( 1, buff_t::DEFAULT_VALUE(), 1.0, p() -> find_spell( 248029 ) -> effectN( 1 ).time_value() );
+      if ( p() -> buff.ascendance -> up() )
+      {
+        p() -> buff.ascendance -> extend_duration( p(), p() -> find_spell( 248029 ) -> effectN( 1 ).time_value());
+      }
+      else
+      {
+        p() -> buff.ascendance -> trigger( 1, buff_t::DEFAULT_VALUE(), 1.0, p() -> find_spell( 248029 ) -> effectN( 1 ).time_value() );
+      }
+      
     }
   }
 };
@@ -8184,7 +8199,19 @@ role_e shaman_t::primary_role() const
   return player_t::primary_role();
 }
 
+// shaman_t::primary_stat ==================================================
+
+stat_e shaman_t::primary_stat() const
+{
+  switch ( specialization() )
+  {
+    case SHAMAN_ENHANCEMENT: return STAT_AGILITY;
+    default:                 return STAT_INTELLECT;
+  }
+}
+
 // shaman_t::convert_hybrid_stat ===========================================
+
 stat_e shaman_t::convert_hybrid_stat( stat_e s ) const
 {
   switch ( s )
@@ -8575,7 +8602,7 @@ struct smoldering_heart_earth_shock_t : public scoped_action_callback_t<earth_sh
 
   void manipulate(earth_shock_t* action, const special_effect_t& e) override
   {
-    action -> smoldering_heart_chance = e.driver() -> effectN( 2 ).percent();
+    action -> smoldering_heart_chance = e.driver() -> effectN( 2 ).percent() / action -> base_cost();
   }
 };
 
@@ -8841,7 +8868,7 @@ struct shaman_module_t : public module_t
     register_special_effect( 208051, sephuzs_secret_t(), true );
     register_special_effect( 248029, smoldering_heart_earth_shock_t() );
     register_special_effect( 248029, smoldering_heart_earthquake_t() );
-    register_special_effect( 151820, primal_ascendants_stormcallers_t() );
+    register_special_effect( 248111, primal_ascendants_stormcallers_t() );
   }
 
   void register_hotfixes() const override
