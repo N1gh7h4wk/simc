@@ -1651,10 +1651,12 @@ struct sim_t : private sc_thread_t
   struct expansion_opt_t
   {
     // Legion
-    int infernal_cinders_users;
-    int engine_of_eradication_orbs;
+    int                 infernal_cinders_users;
+    int                 engine_of_eradication_orbs;
+    std::vector<double> cradle_of_anguish_resets;
 
-    expansion_opt_t() : infernal_cinders_users( 1 ), engine_of_eradication_orbs( 3 )
+    expansion_opt_t() :
+      infernal_cinders_users( 1 ), engine_of_eradication_orbs( 3 )
     { }
   } expansion_opts;
 
@@ -4793,9 +4795,9 @@ public:
   T*& operator[](  const player_t* target ) const
   {
     assert( target );
-    if ( data.empty() )
+    if ( data.size() <= target -> actor_index )
     {
-      data.resize( target -> sim -> actor_list.size() );
+      data.resize( target -> actor_index + 1 );
     }
     return data[ target -> actor_index ];
   }
@@ -7544,14 +7546,14 @@ struct proc_resource_t : public proc_action_t<spell_t>
 };
 
 template <typename CLASS, typename ...ARGS>
-action_t* create_proc_action( const special_effect_t& effect, ARGS&&... args )
+action_t* create_proc_action( const std::string& name, const special_effect_t& effect, ARGS&&... args )
 {
   auto player = effect.player;
-  auto a = player -> find_action( effect.name() );
+  auto a = player -> find_action( name );
 
   if ( a == nullptr )
   {
-    a = player -> create_proc_action( effect.name(), effect );
+    a = player -> create_proc_action( name, effect );
   }
 
   if ( a == nullptr )

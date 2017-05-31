@@ -487,6 +487,8 @@ public:
             return spell -> id() == 194595; // Lock and Load
           case HUNTER_SURVIVAL:
             return spell -> id() == 87935; // Serpent Sting
+          default:
+            return false;
         }
       }
       return false;
@@ -528,6 +530,7 @@ public:
   void      create_pets() override;
   resource_e primary_resource() const override { return RESOURCE_FOCUS; }
   role_e    primary_role() const override { return ROLE_ATTACK; }
+  stat_e    primary_stat() const override { return STAT_AGILITY; }
   stat_e    convert_hybrid_stat( stat_e s ) const override;
   std::string      create_profile( save_e = SAVE_ALL ) override;
   void      copy_from( player_t* source ) override;
@@ -1696,7 +1699,7 @@ struct sneaky_snake_t: public hunter_secondary_pet_t
     {
       background = true;
       hasted_ticks = false;
-      tick_may_crit = true;
+      may_crit = tick_may_crit = true;
       dot_max_stack = data().max_stacks();
 
       cooldown -> duration = p -> find_spell( 243120 ) -> internal_cooldown();
