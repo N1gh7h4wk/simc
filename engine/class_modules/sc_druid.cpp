@@ -5259,8 +5259,7 @@ struct full_moon_t : public druid_spell_t
   void execute() override
   {
     druid_spell_t::execute();
-
-    p() -> moon_stage = NEW_MOON; // TOCHECK: Requires hit?
+    p()->moon_stage = NEW_MOON; // TOCHECK: Requires hit?
   }
 
   bool ready() override
@@ -6085,9 +6084,6 @@ struct starfall_t : public druid_spell_t
     {
       druid_spell_t::execute();
 
-      if ( p() -> sets -> has_set_bonus( DRUID_BALANCE, T20, B4 ))
-         p() -> buff.astral_acceleration -> trigger();
-
       // Non-distance targeting: If we hit more than 1 target, simply trigger the echo as an AoE.
       if ( p() -> artifact.echoing_stars.rank() && ! echoing_stars &&
         ! sim -> distance_targeting_enabled && execute_state -> n_targets > 1 )
@@ -6166,6 +6162,10 @@ struct starfall_t : public druid_spell_t
 
   virtual void execute() override
   {
+    if (p()->sets->has_set_bonus(DRUID_BALANCE, T20, B4) && trigger_gcd > timespan_t::zero())
+    {
+      p()->buff.astral_acceleration->trigger();
+    }
     druid_spell_t::execute();
 
     make_event<ground_aoe_event_t>( *sim, p(), ground_aoe_params_t()
@@ -8269,8 +8269,7 @@ double druid_t::composite_player_multiplier( school_e school ) const
     m *= 1.0 + buff.rage_of_the_sleeper -> check() * buff.rage_of_the_sleeper -> data().effectN( 5 ).percent();
 
   // Fury of Nature increases Arcane and Nature damage
-  // TODO(guardian): confirm damage sources that are/aren't affected
-  if ( dbc::is_school( school, SCHOOL_ARCANE ) || dbc::is_school( school, SCHOOL_NATURE ) )
+  if ( buff.bear_form -> check() && ( dbc::is_school( school, SCHOOL_ARCANE ) || dbc::is_school( school, SCHOOL_NATURE ) ) )
     m *= 1.0 + legendary.fury_of_nature;
 
   m *= 1.0 + artifact.fangs_of_the_first.percent();
@@ -9649,8 +9648,7 @@ struct behemoth_headdress_t : public scoped_actor_callback_t<druid_t>
 
    void manipulate( druid_t* d, const special_effect_t& e ) override
    {
-      d->legendary.behemoth_headdress = 0.4; //TODO(feral): Add spelldata hook.
-         //e.driver()->effectN(1).base_value() / 10;
+      d->legendary.behemoth_headdress = e.driver()->effectN(1).base_value() / 10.0;
    }
 };
 

@@ -208,6 +208,7 @@ public:
   std::vector<counter_t*> counters;
   std::vector<player_t*> lightning_rods;
   int t18_4pc_elemental_counter;
+  double smoldering_heart_chance = 0;
 
   // Options
   unsigned stormlash_targets;
@@ -339,6 +340,7 @@ public:
     cooldown_t* lava_lash;
     cooldown_t* storm_elemental;
     cooldown_t* strike;
+	cooldown_t* t20_4pc_elemental;
   } cooldown;
 
   // Gains
@@ -423,6 +425,7 @@ public:
     const spell_data_t* ancestral_swiftness;
     const spell_data_t* ascendance;
     const spell_data_t* gust_of_wind;
+	const spell_data_t* lightning_surge_totem;
 
     // Elemental
     const spell_data_t* path_of_flame;
@@ -575,6 +578,7 @@ public:
     cooldown.lava_burst           = get_cooldown( "lava_burst"            );
     cooldown.lava_lash            = get_cooldown( "lava_lash"             );
     cooldown.strike               = get_cooldown( "strike"                );
+	cooldown.t20_4pc_elemental	  = get_cooldown( "t20_4pc_elemental"                );
 
     melee_mh = nullptr;
     melee_oh = nullptr;
@@ -623,6 +627,7 @@ public:
   void trigger_t17_4pc_elemental( int );
   void trigger_t18_4pc_elemental();
   void trigger_t19_oh_8pc( const action_state_t* );
+  void trigger_t20_4pc_elemental(const action_state_t*);
   void trigger_stormbringer( const action_state_t* state );
   void trigger_elemental_focus( const action_state_t* state );
   void trigger_lightning_shield( const action_state_t* state );
@@ -1016,7 +1021,7 @@ public:
   double      maelstrom_gain_coefficient;
 
   // Generic procs
-  bool may_proc_unleash_doom;
+  bool may_proc_unleash_doom;  
 
   proc_t* proc_ud;
 
@@ -1166,6 +1171,26 @@ public:
     }
 
     ab::update_ready( cd );
+  }
+
+  virtual void consume_resource() override
+  {
+    ab::consume_resource();
+
+    double maelstromSpent = ab::last_resource_cost;
+
+    if ( p() -> rng().roll( p() -> smoldering_heart_chance * maelstromSpent ) )
+    {
+      // Smoldering Heart spell ID: 248029
+      if ( p() -> buff.ascendance -> up() )
+      {
+        p() -> buff.ascendance -> extend_duration( p(), p() -> find_spell( 248029 ) -> effectN( 1 ).time_value());
+      }
+      else
+      {
+        p() -> buff.ascendance -> trigger( 1, buff_t::DEFAULT_VALUE(), 1.0, p() -> find_spell( 248029 ) -> effectN( 1 ).time_value() );
+      }
+    }
   }
 
   virtual expr_t* create_expression( const std::string& name ) override
@@ -3493,11 +3518,7 @@ struct stormstrike_base_t : public shaman_attack_t
         oh -> execute();
       }
 
-      //PTR-24116: Changed to 1 stack per cast.
-      if ( ! stormflurry )
-      {
-        p() -> buff.t20_4pc_enhancement -> trigger( 1 );
-      }
+      p() -> buff.t20_4pc_enhancement -> trigger( 1 );
 
       if ( p() -> action.storm_tempests )
       {
@@ -3667,11 +3688,8 @@ struct sundering_t : public shaman_attack_t
 
 struct rockbiter_t : public shaman_spell_t
 {
-  double primal_ascendants_stormcallers_chance;
-
   rockbiter_t( shaman_t* player, const std::string& options_str ) :
-    shaman_spell_t( "rockbiter", player, player -> find_specialization_spell( "Rockbiter" ), options_str ),
-    primal_ascendants_stormcallers_chance( 0 )
+    shaman_spell_t( "rockbiter", player, player -> find_specialization_spell( "Rockbiter" ), options_str )
   {
     maelstrom_gain += player -> artifact.gathering_of_the_maelstrom.value();
     base_multiplier *= 1.0 + player -> artifact.weapons_of_the_elements.percent();
@@ -3707,19 +3725,6 @@ struct rockbiter_t : public shaman_spell_t
     p() -> buff.landslide-> trigger();
 
     shaman_spell_t::execute();
-
-    if ( rng().roll(primal_ascendants_stormcallers_chance) )
-    {
-      // Stormcallers of the Ascendant spell ID: 248111
-      if ( p() -> buff.ascendance -> up() )
-      {
-        p() -> buff.ascendance -> extend_duration( p(), p() -> find_spell( 248111 ) -> effectN( 1 ).time_value());
-      }
-      else
-      {
-        p() -> buff.ascendance -> trigger( 1, buff_t::DEFAULT_VALUE(), 1.0, p() -> find_spell( 248111 ) -> effectN( 1 ).time_value() );
-      }
-    }
 
   }
 
@@ -4674,6 +4679,7 @@ struct lightning_bolt_t : public shaman_spell_t
       cooldown -> duration += player -> talent.overcharge -> effectN( 3 ).time_value();
       m_overcharge = player -> talent.overcharge -> effectN( 2 ).percent() /
         player -> talent.overcharge -> effectN( 1 ).base_value();
+      track_cd_waste = true;
     }
 
     // TODO: Is it still 10% per Maelstrom with Stormbringer?
@@ -5190,11 +5196,10 @@ struct earthquake_damage_t : public shaman_spell_t
 struct earthquake_t : public shaman_spell_t
 {
   earthquake_damage_t* rumble;
-  double smoldering_heart_chance;
 
   earthquake_t( shaman_t* player, const std::string& options_str ):
     shaman_spell_t( "earthquake", player, player -> find_specialization_spell( "Earthquake" ), options_str ),
-    rumble( new earthquake_damage_t( player ) ), smoldering_heart_chance( 0 )
+    rumble( new earthquake_damage_t( player ) )
   {
     dot_duration = timespan_t::zero(); // The periodic effect is handled by ground_aoe_event_t
     add_child( rumble );
@@ -5230,18 +5235,6 @@ struct earthquake_t : public shaman_spell_t
 
     p() -> buff.elemental_focus -> decrement();
 
-    if ( rng().roll( smoldering_heart_chance ) )
-    {
-      // Smoldering Heart spell ID: 248029
-      if ( p() -> buff.ascendance -> up() )
-      {
-        p() -> buff.ascendance -> extend_duration( p(), p() -> find_spell( 248029 ) -> effectN( 1 ).time_value());
-      }
-      else
-      {
-        p() -> buff.ascendance -> trigger( 1, buff_t::DEFAULT_VALUE(), 1.0, p() -> find_spell( 248029 ) -> effectN( 1 ).time_value() );
-      }
-    }
   }
 };
 
@@ -5277,12 +5270,11 @@ struct earth_shock_t : public shaman_spell_t
   double base_coefficient;
   double eotgs_base_chance; // 7.0 legendary Echoes of the Great Sundering proc chance
   double tdbp_proc_chance; // 7.0 legendary The Deceiver's Blood Pact proc chance
-  double smoldering_heart_chance; // 7.2.5 legendary Smoldering Heart proc chance
 
   earth_shock_t( shaman_t* player, const std::string& options_str ) :
     shaman_spell_t( "earth_shock", player, player -> find_specialization_spell( "Earth Shock" ), options_str ),
     base_coefficient( data().effectN( 1 ).sp_coeff() / base_cost() ), eotgs_base_chance( 0 ),
-    tdbp_proc_chance( 0 ), smoldering_heart_chance( 0 )
+    tdbp_proc_chance( 0 )
   {
     base_multiplier *= 1.0 + player -> artifact.earthen_attunement.percent();
     secondary_costs[ RESOURCE_MAELSTROM ] += player -> artifact.swelling_maelstrom.data().effectN( 1 ).base_value();
@@ -5310,20 +5302,6 @@ struct earth_shock_t : public shaman_spell_t
     if ( rng().roll( tdbp_proc_chance ) )
     {
       p() -> resource_gain( RESOURCE_MAELSTROM, last_resource_cost, p() -> gain.the_deceivers_blood_pact, this );
-    }
-
-    if ( rng().roll( smoldering_heart_chance * last_resource_cost ) )
-    {
-      // Smoldering Heart spell ID: 248029
-      if ( p() -> buff.ascendance -> up() )
-      {
-        p() -> buff.ascendance -> extend_duration( p(), p() -> find_spell( 248029 ) -> effectN( 1 ).time_value());
-      }
-      else
-      {
-        p() -> buff.ascendance -> trigger( 1, buff_t::DEFAULT_VALUE(), 1.0, p() -> find_spell( 248029 ) -> effectN( 1 ).time_value() );
-      }
-      
     }
   }
 };
@@ -5360,7 +5338,7 @@ struct flame_shock_t : public shaman_spell_t
     if ( player -> sets -> has_set_bonus( SHAMAN_ELEMENTAL, T20, B2 ) &&
          p() -> active_elemental_pet() )
     {
-      m += 1.0;
+      m += p() -> find_spell( 246594 ) -> effectN( 1 ).percent();
     }
 
     return m;
@@ -5381,7 +5359,7 @@ struct flame_shock_t : public shaman_spell_t
     if ( player -> sets -> has_set_bonus( SHAMAN_ELEMENTAL, T20, B2 ) &&
          p() -> active_elemental_pet() )
     {
-      m *= 1.0 + p() -> sets -> set( SHAMAN_ELEMENTAL, T20, B2 ) -> effectN( 1 ).percent();
+      m *= 1.0 + p() -> find_spell( 246594 ) -> effectN( 2 ).percent();
     }
 
     return m;
@@ -5414,9 +5392,14 @@ struct flame_shock_t : public shaman_spell_t
     if ( d -> state -> result == RESULT_CRIT &&
          player -> sets -> has_set_bonus( SHAMAN_ELEMENTAL, T20, B4 ) )
     {
-      p() -> cooldown.fire_elemental  -> adjust( timespan_t::from_seconds( -1.0 * p() -> sets -> set( SHAMAN_ELEMENTAL, T20, B4 ) -> effectN(1).base_value() / 10.0 ) );
-      p() -> cooldown.storm_elemental -> adjust( timespan_t::from_seconds( -1.0 * p() -> sets -> set( SHAMAN_ELEMENTAL, T20, B4 ) -> effectN(2).base_value() / 10.0 ) );
+		p() -> trigger_t20_4pc_elemental( execute_state );
     }
+  }
+
+  void execute() override
+  {
+    shaman_spell_t::execute();
+
   }
 };
 
@@ -5449,6 +5432,7 @@ struct frost_shock_t : public shaman_spell_t
     shaman_spell_t::execute();
 
     p() -> buff.icefury -> decrement();
+
   }
 };
 
@@ -5947,6 +5931,37 @@ struct liquid_magma_totem_t : public shaman_totem_pet_t
 
     pulse_action = new liquid_magma_totem_pulse_t( this );
   }
+};
+
+// Lightning Surge Totem ====================================================
+
+struct lightning_surge_static_charge_t : public spell_t
+{
+	lightning_surge_static_charge_t(shaman_totem_pet_t* p) :
+		spell_t("static_charge", p, p -> find_spell(118905))
+	{
+		aoe = -1;
+		background = may_crit = true;
+		callbacks = false;
+	}
+};
+
+struct lightning_surge_totem_t : public shaman_totem_pet_t {
+	lightning_surge_totem_t(shaman_t* owner) :
+		shaman_totem_pet_t(owner, "lightning_surge_totem") {
+	}
+
+	void init_spells() override {
+		shaman_totem_pet_t::init_spells();
+	}
+
+	void init_action_list() override
+	{
+		clear_action_priority_lists();
+		auto default_list = get_action_priority_list("default");
+
+		default_list->add_action(this, find_pet_spell("Static Chage"), "Static Chage");
+	}
 };
 
 // ==========================================================================
@@ -6473,6 +6488,8 @@ void shaman_t::init_spells()
   talent.path_of_flame               = find_talent_spell( "Path of Flame"        );
   talent.earthen_rage                = find_talent_spell( "Earthen Rage"         );
   talent.totem_mastery               = find_talent_spell( "Totem Mastery"        );
+
+  talent.lightning_surge_totem		 = find_talent_spell( "Lightning Surge Totem");
 
   talent.aftershock                  = find_talent_spell( "Aftershock"           );
   talent.elemental_mastery           = find_talent_spell( "Elemental Mastery"    );
@@ -7059,6 +7076,24 @@ void shaman_t::trigger_t19_oh_8pc( const action_state_t* )
   buff.t19_oh_8pc -> trigger();
 }
 
+void shaman_t::trigger_t20_4pc_elemental(const action_state_t*)
+{
+	if (!sets->has_set_bonus(SHAMAN_ELEMENTAL, T20, B4))
+	{
+		return;
+	}
+
+	if (cooldown.t20_4pc_elemental -> down())
+	{
+		return;
+	}
+
+	cooldown.fire_elemental->adjust(timespan_t::from_seconds(-1.0 * sets->set(SHAMAN_ELEMENTAL, T20, B4)->effectN(1).base_value() / 10.0));
+	cooldown.storm_elemental->adjust(timespan_t::from_seconds(-1.0 * sets->set(SHAMAN_ELEMENTAL, T20, B4)->effectN(2).base_value() / 10.0));
+
+	cooldown.t20_4pc_elemental->start(timespan_t::from_seconds(1));
+}
+
 void shaman_t::trigger_flametongue_weapon( const action_state_t* state )
 {
   assert( debug_cast< shaman_attack_t* >( state -> action ) != nullptr && "Flametongue Weapon called on invalid action type" );
@@ -7474,7 +7509,8 @@ void shaman_t::init_action_list_elemental()
   // Single target - Lightning Rod
   single_lr -> add_action( this, "Flame Shock", "if=!ticking|dot.flame_shock.remains<=gcd" );
   single_lr -> add_action( this, "Earthquake", "if=buff.echoes_of_the_great_sundering.up&maelstrom>=86" );
-  single_lr -> add_talent( this, "Elemental Blast" );
+  single_lr -> add_talent( this, "Elemental Blast", "", "Keep your EB always on Cooldown." );
+  single_lr -> add_action( this, "Earthquake", "if=buff.echoes_of_the_great_sundering.up|artifact.seismic_storm.enabled&((active_enemies>1&spell_targets.chain_lightning>1)|spell_haste<=0.66&!(buff.bloodlust.up&buff.bloodlust.remains<5))", "Use EQ on single target if you have a huge haste buff that increases haste above 50% and said buffs still last longer than 5 seconds OR two enemies." );
   single_lr -> add_action( this, "Earth Shock", "if=maelstrom>=117|!artifact.swelling_maelstrom.enabled&maelstrom>=92" );
   single_lr -> add_action( this, "Stormkeeper", "if=raid_event.adds.count<3|raid_event.adds.in>50", "Keep SK for large or soon add waves." );
   single_lr -> add_talent( this, "Liquid Magma Totem", "if=raid_event.adds.count<3|raid_event.adds.in>50" );
@@ -7482,7 +7518,6 @@ void shaman_t::init_action_list_elemental()
   single_lr -> add_action( this, "Flame Shock", "if=maelstrom>=20&buff.elemental_focus.up,target_if=refreshable" );
   single_lr -> add_action( this, "Earth Shock", "if=maelstrom>=111|!artifact.swelling_maelstrom.enabled&maelstrom>=86" );
   single_lr -> add_talent( this, "Totem Mastery", "if=buff.resonance_totem.remains<10|(buff.resonance_totem.remains<(buff.ascendance.duration+cooldown.ascendance.remains)&cooldown.ascendance.remains<15)" );
-  single_lr -> add_action( this, "Earthquake", "if=buff.echoes_of_the_great_sundering.up|artifact.seismic_storm.enabled&((active_enemies>1&spell_targets.chain_lightning>1)|spell_haste<=0.66&!(buff.bloodlust.up&buff.bloodlust.remains<5))", "Use EQ on single target if you have a huge haste buff that increases haste above 50% and said buffs still last longer than 5 seconds OR two enemies." );
   single_lr -> add_action( this, "Lightning Bolt", "if=buff.power_of_the_maelstrom.up&spell_targets.chain_lightning<3,target_if=debuff.lightning_rod.down" );
   single_lr -> add_action( this, "Lightning Bolt", "if=buff.power_of_the_maelstrom.up&spell_targets.chain_lightning<3" );
   single_lr -> add_action( this, "Chain Lightning", "if=active_enemies>1&spell_targets.chain_lightning>1,target_if=debuff.lightning_rod.down" );
@@ -7497,7 +7532,7 @@ void shaman_t::init_action_list_elemental()
   single_if -> add_action( this, "Flame Shock", "if=!ticking|dot.flame_shock.remains<=gcd" );
   single_if -> add_action( this, "Earthquake", "if=buff.echoes_of_the_great_sundering.up&maelstrom>=86" );
   single_if -> add_action( this, "Frost Shock", "if=buff.icefury.up&maelstrom>=111" );
-  single_if -> add_talent( this, "Elemental Blast" );
+  single_if -> add_talent( this, "Elemental Blast", "", "Keep your EB always on Cooldown." );
   single_if -> add_action( this, "Earth Shock", "if=maelstrom>=117|!artifact.swelling_maelstrom.enabled&maelstrom>=92" );
   single_if -> add_action( this, "Stormkeeper", "if=raid_event.adds.count<3|raid_event.adds.in>50", "Keep SK for large or soon spawning add waves." );
   single_if -> add_talent( this, "Icefury", "if=raid_event.movement.in<5|maelstrom<=101" );
@@ -7521,7 +7556,8 @@ void shaman_t::init_action_list_elemental()
   single_asc -> add_talent( this, "Ascendance", "if=dot.flame_shock.remains>buff.ascendance.duration&(time>=60|buff.bloodlust.up)&cooldown.lava_burst.remains>0&!buff.stormkeeper.up" );
   single_asc -> add_action( this, "Flame Shock", "if=!ticking|dot.flame_shock.remains<=gcd" );
   single_asc -> add_action( this, "Flame Shock", "if=maelstrom>=20&remains<=buff.ascendance.duration&cooldown.ascendance.remains+buff.ascendance.duration<=duration" );
-  single_asc -> add_talent( this, "Elemental Blast" );
+  single_asc -> add_talent( this, "Elemental Blast", "", "Keep your EB always on Cooldown." );
+  single_asc -> add_action( this, "Earthquake", "if=buff.echoes_of_the_great_sundering.up|artifact.seismic_storm.enabled&((active_enemies>1&spell_targets.chain_lightning>1)|spell_haste<=0.66&!(buff.bloodlust.up&buff.bloodlust.remains<5))&!buff.ascendance.up", "Use EQ on single target, if you have a huge haste buff, that increases haste above 50% and said buff still lasts longer than 5 seconds OR two enemies. Don't use EQ during Ascendance." );
   single_asc -> add_action( this, "Earthquake", "if=buff.echoes_of_the_great_sundering.up&!buff.ascendance.up&maelstrom>=86" );
   single_asc -> add_action( this, "Earth Shock", "if=maelstrom>=117|!artifact.swelling_maelstrom.enabled&maelstrom>=92" );
   single_asc -> add_action( this, "Stormkeeper", "if=raid_event.adds.count<3|raid_event.adds.in>50", "Keep SK for large or soon add waves." );
@@ -7531,7 +7567,6 @@ void shaman_t::init_action_list_elemental()
   single_asc -> add_action( this, "Flame Shock", "if=maelstrom>=20&buff.elemental_focus.up,target_if=refreshable" );
   single_asc -> add_action( this, "Earth Shock", "if=maelstrom>=111|!artifact.swelling_maelstrom.enabled&maelstrom>=86" );
   single_asc -> add_talent( this, "Totem Mastery", "if=buff.resonance_totem.remains<10|(buff.resonance_totem.remains<(buff.ascendance.duration+cooldown.ascendance.remains)&cooldown.ascendance.remains<15)" );
-  single_asc -> add_action( this, "Earthquake", "if=buff.echoes_of_the_great_sundering.up|artifact.seismic_storm.enabled&((active_enemies>1&spell_targets.chain_lightning>1)|spell_haste<=0.66&!(buff.bloodlust.up&buff.bloodlust.remains<5))", "Use EQ on single target if you have a huge haste buff that increases haste above 50% and said buffs still last longer than 5 seconds OR two enemies." );
   single_asc -> add_action( this, "Lava Beam", "if=active_enemies>1&spell_targets.lava_beam>1" );
   single_asc -> add_action( this, "Lightning Bolt", "if=buff.power_of_the_maelstrom.up&spell_targets.chain_lightning<3" );
   single_asc -> add_action( this, "Chain Lightning", "if=active_enemies>1&spell_targets.chain_lightning>1" );
@@ -8599,36 +8634,22 @@ struct echoes_of_the_great_sundering_buff_t : public class_buff_cb_t<buff_t>
   { return super::creator( e ).spell( e.player -> find_spell( 208723 ) ); }
 };
 
-struct smoldering_heart_earth_shock_t : public scoped_action_callback_t<earth_shock_t>
+struct smoldering_heart_chance_t : public unique_gear::scoped_actor_callback_t<shaman_t>
 {
-  smoldering_heart_earth_shock_t() : super(SHAMAN, "earth_shock")
+  smoldering_heart_chance_t() : super( SHAMAN )
   { }
 
-  void manipulate(earth_shock_t* action, const special_effect_t& e) override
+  void manipulate(shaman_t* shaman, const special_effect_t& e) override
   {
-    action -> smoldering_heart_chance = e.driver() -> effectN( 2 ).percent() / action -> base_cost();
-  }
-};
-
-struct smoldering_heart_earthquake_t : public scoped_action_callback_t<earthquake_t>
-{
-  smoldering_heart_earthquake_t() : super(SHAMAN, "earthquake")
-  { }
-
-  void manipulate(earthquake_t* action, const special_effect_t& e) override
-  {
-    action -> smoldering_heart_chance = e.driver() -> effectN( 3 ).percent();
-  }
-};
-
-struct primal_ascendants_stormcallers_t : public scoped_action_callback_t<rockbiter_t>
-{
-  primal_ascendants_stormcallers_t() : super(SHAMAN, "rockbiter")
-  { }
-
-  void manipulate(rockbiter_t* action, const special_effect_t& e) override
-  {
-    action -> primal_ascendants_stormcallers_chance = e.driver() -> proc_chance();
+    if ( shaman -> specialization() == SHAMAN_ENHANCEMENT )
+    {
+      shaman -> smoldering_heart_chance = e.driver() -> effectN( 3 ).percent() / 100.0;
+    }
+    
+    if ( shaman -> specialization() == SHAMAN_ELEMENTAL )
+    {
+      shaman -> smoldering_heart_chance = e.driver() -> effectN( 2 ).percent() / 100.0;
+    }
   }
 };
 
@@ -8870,9 +8891,7 @@ struct shaman_module_t : public module_t
     register_special_effect( 234814, uncertain_reminder_t() );
     register_special_effect( 208051, sephuzs_secret_enabler_t() );
     register_special_effect( 208051, sephuzs_secret_t(), true );
-    register_special_effect( 248029, smoldering_heart_earth_shock_t() );
-    register_special_effect( 248029, smoldering_heart_earthquake_t() );
-    register_special_effect( 248111, primal_ascendants_stormcallers_t() );
+    register_special_effect( 248029, smoldering_heart_chance_t() );
   }
 
   void register_hotfixes() const override
