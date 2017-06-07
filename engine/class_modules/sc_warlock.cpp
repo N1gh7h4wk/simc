@@ -5218,6 +5218,12 @@ struct demonbolt_t : public warlock_spell_t
     {
       p() -> buffs.tier18_2pc_demonology -> trigger( 1 );
     }
+
+    if ( p() -> sets -> has_set_bonus( WARLOCK_DEMONOLOGY, T20, B2 ) && p() -> rng().roll( p() -> sets -> set( WARLOCK_DEMONOLOGY, T20, B2 ) -> proc_chance() ) )
+    {
+      p() -> cooldowns.call_dreadstalkers -> reset( true );
+      p() -> procs.demonology_t20_2pc -> occur();
+    }
   }
 };
 
@@ -5602,6 +5608,8 @@ struct soul_harvest_t : public warlock_spell_t
   virtual void execute() override
   {
     warlock_spell_t::execute();
+    
+    p() -> buffs.soul_harvest -> expire(); //Potentially bugged check when live
 
     if ( p() -> specialization() == WARLOCK_AFFLICTION )
     {
@@ -5647,8 +5655,9 @@ struct reap_souls_t: public warlock_spell_t
 {
   timespan_t base_duration;
   timespan_t total_duration;
-  timespan_t check_time;
+  timespan_t base_time;
   timespan_t reap_and_sow_bonus;
+  timespan_t max_extension;
   int souls_consumed;
     reap_souls_t( warlock_t* p ) :
         warlock_spell_t( "reap_souls", p, p -> artifact.reap_souls ), souls_consumed( 0 )
@@ -5673,12 +5682,13 @@ struct reap_souls_t: public warlock_spell_t
 
       if ( p() -> artifact.reap_souls.rank() && p() -> buffs.tormented_souls -> check() )
       {
-          check_time = base_duration + reap_and_sow_bonus;
-
+        base_time = base_duration + reap_and_sow_bonus;
         souls_consumed = p() -> buffs.tormented_souls -> stack();
-//        total_duration = base_duration * souls_consumed;
-        total_duration = check_time * souls_consumed;
-        p() -> buffs.deadwind_harvester -> trigger( 1, buff_t::DEFAULT_VALUE(), -1.0, total_duration );
+        total_duration = base_time * souls_consumed;
+        max_extension = base_time * 12 - p() -> buffs.deadwind_harvester -> remains();
+
+        p() -> buffs.deadwind_harvester -> trigger( 1, buff_t::DEFAULT_VALUE(), -1.0, std::min( max_extension, total_duration ) );
+
         for ( int i = 0; i < souls_consumed; ++i )
         {
           p() -> procs.souls_consumed -> occur();
@@ -6825,7 +6835,8 @@ void warlock_t::create_buffs()
   buffs.misery = haste_buff_creator_t( this, "misery", find_spell( 216412 ) )
     .default_value( find_spell( 216412 ) -> effectN( 1 ).percent() );
   buffs.deadwind_harvester = buff_creator_t( this, "deadwind_harvester", find_spell( 216708 ) )
-    .add_invalidate( CACHE_PLAYER_DAMAGE_MULTIPLIER );
+    .add_invalidate( CACHE_PLAYER_DAMAGE_MULTIPLIER )
+    .refresh_behavior( BUFF_REFRESH_EXTEND );
   buffs.tormented_souls = buff_creator_t( this, "tormented_souls", find_spell( 216695 ) )
     .tick_behavior( BUFF_TICK_NONE );
   buffs.compounding_horror = buff_creator_t( this, "compounding_horror", find_spell( 199281 ) );
@@ -7294,9 +7305,31 @@ void warlock_t::reset()
 {
   player_t::reset();
 
-  for ( size_t i = 0; i < sim -> actor_list.size(); i++ )
+  // Figure out up to what actor ID we should reset. This is the max of target list actors, and
+  // their pets
+  size_t max_idx = sim -> target_list.data().back() -> actor_index + 1;
+  if ( sim -> target_list.data().back() -> pet_list.size() > 0 )
   {
-    warlock_td_t* td = target_data[sim -> actor_list[i]];
+    max_idx = sim -> target_list.data().back() -> pet_list.back() -> actor_index + 1;
+  }
+
+  range::for_each( sim -> target_list, [ this ]( const player_t* t ) {
+    if ( auto td = target_data[ t ] )
+    {
+      td -> reset();
+    }
+
+    range::for_each( t -> pet_list, [ this ]( const player_t* add ) {
+      if ( auto td = target_data[ add ] )
+      {
+        td -> reset();
+      }
+    } );
+  } );
+
+  if ( talents.soul_effigy -> ok() && warlock_pet_list.soul_effigy )
+  {
+    warlock_td_t* td = target_data[ warlock_pet_list.soul_effigy ];
     if ( td ) td -> reset();
   }
 
@@ -8168,7 +8201,7 @@ struct recurrent_ritual_t : public scoped_action_callback_t<call_dreadstalkers_t
 
   void manipulate( call_dreadstalkers_t* a, const special_effect_t& e ) override
   {
-    a -> recurrent_ritual = e.driver() -> effectN( 1 ).trigger() -> effectN( 1 ).base_value();
+    a -> recurrent_ritual = e.driver() -> effectN( 1 ).trigger() -> effectN( 1 ).base_value() / 10.0;
   }
 };
 

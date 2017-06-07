@@ -1324,6 +1324,7 @@ class SpellDataGenerator(DataGenerator):
             ( 192380, 0 ),          # Poisoned Knives damage component
             ( 202848, 0 ),          # Blunderbuss driver
             ( 197496, 0 ), ( 197498, 0 ), # New nightblade buffs
+            ( 246558, 0 ),          # Outlaw T20 4pc Lesser Adrenaline Rush
         ),
 
         # Priest:
@@ -1432,6 +1433,9 @@ class SpellDataGenerator(DataGenerator):
           ( 240689, 0 ),                            # Aluneth - Time and Space
           ( 248147, 0 ),                            # Erupting Infernal Core
           ( 248177, 0 ),                            # Rage of the Frost Wyrm
+          ( 222305, 0 ),                            # Sorcerous Fireball
+          ( 222320, 0 ),                            # Sorcerous Frostbolt
+          ( 222321, 0 ),                            # Sorcerous Arcane Blast
         ),
 
         # Warlock:
