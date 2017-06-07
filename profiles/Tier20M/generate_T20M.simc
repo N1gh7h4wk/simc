@@ -44,3 +44,6 @@ generate_Druid_T20M.simc
 #generate_Warlock_T20M.simc
 
 #generate_Warrior_T20M.simc
+
+# Priest
+generate_Priest_T20M.simc

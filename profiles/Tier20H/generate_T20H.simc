@@ -46,3 +46,6 @@ generate_Warlock_T20H.simc
 
 # Warrior
 #generate_Warrior_T20H.simc
+
+# Priest
+generate_Priest_T20H.simc
